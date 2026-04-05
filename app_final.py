@@ -527,7 +527,6 @@ if active_tab == "Overview":
             **plot_base(height=280),
             bargap=0.45,
             yaxis_title="MWh",
-            xaxis=dict(tickfont=dict(size=13, family="Inter", color=PLOT_TEXT)),
         )
         fig_campus.update_yaxes(range=[0, y_max])
         st.plotly_chart(fig_campus, use_container_width=True)
