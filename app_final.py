@@ -456,11 +456,11 @@ if active_tab == "Overview":
             unsafe_allow_html=True)
     with hcol_r:
         if len(sorted_sel) == 1:
-            rw_str = week_label(sorted_sel[0])
+            rw_str = period_label(sorted_sel[0])
         elif len(sorted_sel) == 2:
-            rw_str = f"{week_label(sorted_sel[0])} vs {week_label(sorted_sel[1])}"
+            rw_str = f"{period_label(sorted_sel[0])} vs {period_label(sorted_sel[1])}"
         else:
-            rw_str = f"{week_label(sorted_sel[0])} – {week_label(sorted_sel[-1])}"
+            rw_str = f"{period_label(sorted_sel[0])} – {period_label(sorted_sel[-1])}"
         st.markdown(
             f'<div style="margin-top:32px">'
             f'<div class="rw-box">'
@@ -483,7 +483,7 @@ if active_tab == "Overview":
     k1, k2, k3 = st.columns(3)
 
     k1.metric(
-        f"Total Campus Electricity — {week_label(latest_week)}",
+        f"Total Campus Electricity — {period_label(latest_week)}",
         fmt_kwh(campus_cur))
 
     k2.metric(
@@ -493,7 +493,7 @@ if active_tab == "Overview":
     if prev_week and pct_change is not None:
         arrow = "▲" if pct_change > 0 else "▼"
         k3.metric(
-            f"vs {week_label(prev_week)}",
+            f"vs {period_label(prev_week)}",
             f"{arrow} {abs(pct_change):.1f}%",
             delta=f"{'Up' if pct_change > 0 else 'Down'} {fmt_kwh(abs(campus_cur - campus_prev))}",
             delta_color="inverse")
@@ -503,13 +503,13 @@ if active_tab == "Overview":
 
     # ── CAMPUS TOTAL CHART — top of page ────────────────────────────────────
     if len(sorted_sel) >= 2:
-        st.markdown('<div class="sec-label">Total Campus Electricity — All Selected Weeks</div>',
+        st.markdown(f'<div class="sec-label">Total Campus Electricity — All Selected Periods</div>',
                     unsafe_allow_html=True)
 
         campus_by_week = (by_bld[by_bld["week"].isin(sorted_sel)]
                           .groupby("week")["kWh"].sum()
                           .reset_index().sort_values("week"))
-        campus_by_week["label"] = campus_by_week["week"].apply(week_label)
+        campus_by_week["label"] = campus_by_week["week"].apply(period_label)
         campus_by_week["disp"]  = campus_by_week["kWh"] / 1000  # MWh
 
         fig_campus = go.Figure(go.Bar(
@@ -572,7 +572,7 @@ if active_tab == "Overview":
 
         bm1, bm2 = st.columns(2)
         bm1.metric(
-            f"Electricity — {week_label(latest_week)}",
+            f"Electricity — {period_label(latest_week)}",
             fmt_kwh(b_cur))
         bm2.metric(
             f"Estimated Cost  (@ ${ENERGY_RATE}/kWh)",
@@ -581,7 +581,7 @@ if active_tab == "Overview":
         if prev_week and b_prev is not None and b_prev > 0:
             st.markdown(
                 f'<div class="alert-blue" style="margin-top:8px;">'
-                f'Compared to <b>{week_label(prev_week)}</b>: '
+                f'Compared to <b>{period_label(prev_week)}</b>: '
                 f'<b>{fmt_kwh(b_prev)}</b> — '
                 f'{"▲" if b_pct > 0 else "▼"} <b>{abs(b_pct):.1f}%</b> '
                 f'({"up" if b_pct > 0 else "down"} {fmt_kwh(abs(b_cur - b_prev))})</div>',
@@ -592,9 +592,9 @@ if active_tab == "Overview":
         chart_weeks = sorted_sel[-max_periods:]
         n_periods   = len(chart_weeks)
 
-        chart_title = (f"All Buildings — {week_label(chart_weeks[0])}"
+        chart_title = (f"All Buildings — {period_label(chart_weeks[0])}"
                        if n_periods == 1
-                       else f"All Buildings — {week_label(chart_weeks[0])} to {week_label(chart_weeks[-1])}")
+                       else f"All Buildings — {period_label(chart_weeks[0])} to {period_label(chart_weeks[-1])}")
         if n_periods == max_periods:
             chart_title += f" (max {max_periods} weeks shown)"
 
@@ -607,7 +607,7 @@ if active_tab == "Overview":
             ldf["disp"] = ldf["kWh"] / 1000  # MWh
 
             fig_all = go.Figure(go.Bar(
-                name=week_label(chart_weeks[0]),
+                name=period_label(chart_weeks[0]),
                 y=ldf["building"],
                 x=ldf["disp"],
                 orientation="h",
@@ -642,7 +642,7 @@ if active_tab == "Overview":
                            .set_index("building")["kWh"]
                            .reindex(all_blds_sorted).fillna(0) / 1000)
                 fig_all.add_trace(go.Bar(
-                    name=week_label(wk),
+                    name=period_label(wk),
                     y=all_blds_sorted,
                     x=wk_data.values,
                     orientation="h",
@@ -650,7 +650,7 @@ if active_tab == "Overview":
                     text=[f"{v:.1f}" if v > 0 else "" for v in wk_data.values],
                     textposition="outside",
                     textfont=dict(size=10, color="#374151", family="Inter"),
-                    hovertemplate=f"<b>%{{y}}</b><br>{week_label(wk)}: %{{x:.1f}} MWh<extra></extra>",
+                    hovertemplate=f"<b>%{{y}}</b><br>{period_label(wk)}: %{{x:.1f}} MWh<extra></extra>",
                 ))
 
             fig_all.update_layout(
@@ -674,11 +674,11 @@ if active_tab == "Overview":
         bld_trend = (by_bld[by_bld["building"] == sel_bld]
                      .sort_values("week").copy())
         if len(bld_trend) >= 2:
-            bld_trend["label"] = bld_trend["week"].apply(week_label)
+            bld_trend["label"] = bld_trend["week"].apply(period_label)
             bld_trend["disp"]  = bld_trend["kWh"] / 1000
 
             st.markdown(
-                f'<div class="sec-label">{sel_bld} — Weekly Trend</div>',
+                f'<div class="sec-label">{sel_bld} — Trend ({time_filter})</div>',
                 unsafe_allow_html=True)
 
             vals_t = bld_trend["kWh"].values
@@ -718,7 +718,7 @@ if active_tab == "Overview":
         st.markdown(
             f'<div class="card">'
             f'<div class="card-title">Top Buildings by Electricity</div>'
-            f'<div class="card-sub">{week_label(latest_week)}</div>'
+            f'<div class="card-sub">{period_label(latest_week)}</div>'
             f'{bars_html}'
             f'</div>',
             unsafe_allow_html=True)
@@ -759,9 +759,9 @@ elif active_tab == "Leaderboard":
 
     with hcol_r2:
         if lb_prev:
-            cmp_str = f"{week_label(lb_prev)}  vs  {week_label(lb_latest)}"
+            cmp_str = f"{period_label(lb_prev)}  vs  {period_label(lb_latest)}"
         else:
-            cmp_str = week_label(lb_latest)
+            cmp_str = period_label(lb_latest)
         st.markdown(
             f'<div style="margin-top:32px"><div class="rw-box">'
             f'<span class="rw-label">Comparing</span>'
@@ -872,7 +872,7 @@ elif active_tab == "Leaderboard":
             f'<span style="color:{pts_col};font-weight:700">{act_str}</span>'
             + (f'  ·  {cost_str}' if cost_str else '') +
             f'<br><span style="color:#9ca3af;font-size:0.82rem">'
-            f'{week_label(lb_prev)}: {p_kwh} → {week_label(lb_latest)}: {c_kwh}</span>'
+            f'{period_label(lb_prev)}: {p_kwh} → {period_label(lb_latest)}: {c_kwh}</span>'
             '</div></div>'
             + streak_tag +
             f'<div style="text-align:right;min-width:88px">'
