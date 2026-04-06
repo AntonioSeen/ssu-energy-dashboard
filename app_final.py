@@ -664,7 +664,7 @@ if active_tab == "Overview":
                 legend=dict(
                     orientation="h", yanchor="bottom", y=1.01,
                     xanchor="right", x=1,
-                    font=dict(size=12, family="Inter"),
+                    font=dict(size=12, family="Inter", color=PLOT_TEXT),
                     bgcolor="#ffffff", bordercolor="#e2e8f0", borderwidth=1),
             )
             fig_all.update_yaxes(tickfont=dict(size=12, color="#111827", family="Inter"))
