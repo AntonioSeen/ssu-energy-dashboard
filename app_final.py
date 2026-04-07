@@ -196,43 +196,43 @@ BUILDINGS_STATUS = {
 }
 
 SENSOR_REGISTRY = [
-    ("Green Music Center",          "234ab131-e413ba29", "Electric", "kWh",   "OK",     "Primary electric — ~85 kWh per 15-min interval"),
-    ("Green Music Center",          "1f98265e-39835c84", "Thermal",  "BTU",   "OK",     "Chilled hot water BTU"),
-    ("Green Music Center",          "234aa956-82d369b2", "Thermal",  "kBTU",  "OK",     "Hot water BTU (labelled _MBTU in FTP — corrected to kBTU)"),
-    ("Green Music Center",          "234aab84-c656a0e0", "Gas",      "therm", "Missing","100% missing from FTP"),
-    ("Green Music Center",          "234aa782-f7b1eef2", "Water",    "gallon","Missing","Meter present — all NaN in FTP files"),
-    ("Nichols Hall",                "234e3ee2-f6fcea18", "Thermal",  "BTU",   "OK",     "Active — ~20,000 kWh/day thermal"),
-    ("Nichols Hall",                "234e3ee2-b06b6c8c", "Thermal",  "BTU",   "OK",     "Active but 0 BTU reported"),
-    ("Nichols Hall",                "234e40da-635bc7c1", "Electric", "kWh",   "OK",     "Active but 0 kWh reported"),
-    ("Physical Education",          "206db469-c986212b", "Electric", "kWh",   "OK",     "Consistent — ~11 kWh per 15-min"),
-    ("Rachel Carson Hall",          "1f98265e-cbf77175", "Electric", "kWh",   "Missing","Missing from interval files — data from DB (Feb 2–5)"),
-    ("Rachel Carson Hall",          "234aa121-a983880d", "Thermal",  "BTU",   "OK",     "Active; 1 interval missing per day"),
-    ("Rachel Carson Hall",          "234aa43b-a73abf5e", "Thermal",  "BTU",   "OK",     "Active but 0 BTU"),
-    ("Ives Hall",                   "234e3195-7d72fbdc", "Thermal",  "BTU",   "OK",     "Active — ~950–1,243 kWh/day thermal"),
-    ("Ives Hall",                   "234e3195-c20a1a8e", "Thermal",  "BTU",   "OK",     "Active but 0 BTU"),
-    ("Ives Hall",                   "206d9425-f3361ab6", "Electric", "kWh",   "OK",     "Active but 0 kWh (meter may be offline)"),
-    ("Student Center",              "234e5dff-8d8eb031", "Thermal",  "BTU",   "OK",     "Active — variable daily"),
-    ("Student Center",              "234e5dff-6fe20abd", "Thermal",  "BTU",   "OK",     "Active — secondary thermal"),
-    ("Student Center",              "20c9aa07-acd1558a", "Electric", "kWh",   "OK",     "Active but 0 kWh reported"),
-    ("Wine Spectator Learning Ctr", "250ea73e-3b55a6cf", "Electric", "kWh",   "Review", "75% data gaps — 24 of 96 intervals received daily"),
-    ("Art Building",                "1f97c82e-36e60525", "Thermal",  "BTU",   "Missing","100% missing from FTP"),
-    ("Art Building",                "1f97c82e-d1a92673", "Thermal",  "BTU",   "Missing","100% missing from FTP"),
-    ("Boiler Plant",                "234a6e2b-318cf13d", "Gas",      "therm", "Missing","100% missing from FTP"),
-    ("Darwin Hall",                 "267e6fd0-93d67a62", "Electric", "kWh",   "Missing","100% missing from FTP"),
-    ("ETC",                         "1f97c82e-dd011464", "Electric", "kWh",   "Missing","100% missing from FTP"),
-    ("Salazar Hall",                "20c9b2e1-d7263cf1", "Electric", "kWh",   "Missing","100% missing from FTP"),
-    ("Salazar Hall",                "234e4c64-930d1fd6", "Electric", "kWh",   "Missing","100% missing from FTP"),
-    ("Salazar Hall",                "20c9b4d5-5ea6aa0b", "Thermal",  "BTU",   "Missing","100% missing from FTP"),
-    ("Schulz Info Center",          "1f97c82e-c34c4f2e", "Electric", "kWh",   "Missing","100% missing from FTP"),
-    ("Schulz Info Center",          "1f97c82e-525ca261", "Thermal",  "BTU",   "Missing","100% missing from FTP"),
-    ("Schulz Info Center",          "206e94b8-3b05cb50", "Gas",      "therm", "Missing","100% missing from FTP"),
-    ("Stevenson Hall",              "251810ce-f429b841", "Electric", "kWh",   "Missing","100% missing from FTP"),
-    ("Stevenson Hall",              "267fcb62-ed42e3b3", "Thermal",  "BTU",   "Missing","100% missing from FTP"),
-    ("Student Health Center",       "234e61c5-021da430", "Thermal",  "BTU",   "OK",     "Active but 0 BTU"),
-    ("Student Health Center",       "234e61c5-83f6cf71", "Thermal",  "BTU",   "OK",     "Active but 0 BTU"),
-    ("Campus Misc",                 "214981c7-dd0b1593", "Electric", "kWh",   "PGE",    "pgeReports FTP folder"),
-    ("Campus Misc",                 "214981c7-5530731e", "Electric", "kWh",   "PGE",    "pgeReports FTP folder"),
-    ("Campus Misc",                 "214981c7-63077e46", "Electric", "kWh",   "PGE",    "pgeReports FTP folder"),
+    ("Green Music Center",          "234ab131-e413ba29", "Electric", "kWh",   "OK",     "Active — primary electric meter, ~85 kWh per reading"),
+    ("Green Music Center",          "1f98265e-39835c84", "Thermal",  "BTU",   "OK",     "Active — chilled water cooling loop"),
+    ("Green Music Center",          "234aa956-82d369b2", "Thermal",  "kBTU",  "OK",     "Active — heating hot water loop"),
+    ("Green Music Center",          "234aab84-c656a0e0", "Gas",      "therm", "Missing","No data received"),
+    ("Green Music Center",          "234aa782-f7b1eef2", "Water",    "gallon","Missing","No data received"),
+    ("Nichols Hall",                "234e3ee2-f6fcea18", "Thermal",  "BTU",   "OK",     "Active — heating hot water loop, ~20,000 kWh/day"),
+    ("Nichols Hall",                "234e3ee2-b06b6c8c", "Thermal",  "BTU",   "OK",     "Active — chilled water cooling loop, reporting zero"),
+    ("Nichols Hall",                "234e40da-635bc7c1", "Electric", "kWh",   "OK",     "Active — reporting zero, meter may be offline"),
+    ("Physical Education",          "206db469-c986212b", "Electric", "kWh",   "OK",     "Active — consistent readings, ~11 kWh per reading"),
+    ("Rachel Carson Hall",          "1f98265e-cbf77175", "Electric", "kWh",   "Missing","No data received"),
+    ("Rachel Carson Hall",          "234aa121-a983880d", "Thermal",  "BTU",   "OK",     "Active — chilled water cooling loop, minor daily gaps"),
+    ("Rachel Carson Hall",          "234aa43b-a73abf5e", "Thermal",  "BTU",   "OK",     "Active — heating hot water loop, reporting zero"),
+    ("Ives Hall",                   "234e3195-7d72fbdc", "Thermal",  "BTU",   "OK",     "Active — heating hot water loop, 950–1,243 kWh/day"),
+    ("Ives Hall",                   "234e3195-c20a1a8e", "Thermal",  "BTU",   "OK",     "Active — chilled water cooling loop, reporting zero"),
+    ("Ives Hall",                   "206d9425-f3361ab6", "Electric", "kWh",   "OK",     "Active — reporting zero, meter may be offline"),
+    ("Student Center",              "234e5dff-8d8eb031", "Thermal",  "BTU",   "OK",     "Active — heating hot water loop, variable output"),
+    ("Student Center",              "234e5dff-6fe20abd", "Thermal",  "BTU",   "OK",     "Active — chilled water cooling loop"),
+    ("Student Center",              "20c9aa07-acd1558a", "Electric", "kWh",   "OK",     "Active — reporting zero, meter may be offline"),
+    ("Wine Spectator Learning Ctr", "250ea73e-3b55a6cf", "Electric", "kWh",   "Review", "Only 25% of expected readings received — kWh understated ~4×"),
+    ("Art Building",                "1f97c82e-36e60525", "Thermal",  "BTU",   "Missing","No data received"),
+    ("Art Building",                "1f97c82e-d1a92673", "Thermal",  "BTU",   "Missing","No data received"),
+    ("Boiler Plant",                "234a6e2b-318cf13d", "Gas",      "therm", "Missing","No data received"),
+    ("Darwin Hall",                 "267e6fd0-93d67a62", "Electric", "kWh",   "Missing","No data received"),
+    ("ETC",                         "1f97c82e-dd011464", "Electric", "kWh",   "Missing","No data received"),
+    ("Salazar Hall",                "20c9b2e1-d7263cf1", "Electric", "kWh",   "Missing","No data received"),
+    ("Salazar Hall",                "234e4c64-930d1fd6", "Electric", "kWh",   "Missing","No data received"),
+    ("Salazar Hall",                "20c9b4d5-5ea6aa0b", "Thermal",  "BTU",   "Missing","No data received"),
+    ("Schulz Info Center",          "1f97c82e-c34c4f2e", "Electric", "kWh",   "Missing","No data received"),
+    ("Schulz Info Center",          "1f97c82e-525ca261", "Thermal",  "BTU",   "Missing","No data received"),
+    ("Schulz Info Center",          "206e94b8-3b05cb50", "Gas",      "therm", "Missing","No data received"),
+    ("Stevenson Hall",              "251810ce-f429b841", "Electric", "kWh",   "Missing","No data received"),
+    ("Stevenson Hall",              "267fcb62-ed42e3b3", "Thermal",  "BTU",   "Missing","No data received"),
+    ("Student Health Center",       "234e61c5-021da430", "Thermal",  "BTU",   "OK",     "Active — chilled water cooling loop, reporting zero"),
+    ("Student Health Center",       "234e61c5-83f6cf71", "Thermal",  "BTU",   "OK",     "Active — chilled water cooling loop, reporting zero"),
+    ("Campus Misc",                 "214981c7-dd0b1593", "Electric", "kWh",   "PGE",    "PG&E utility account meter"),
+    ("Campus Misc",                 "214981c7-5530731e", "Electric", "kWh",   "PGE",    "PG&E utility account meter"),
+    ("Campus Misc",                 "214981c7-63077e46", "Electric", "kWh",   "PGE",    "PG&E utility account meter"),
 ]
 
 
@@ -452,7 +452,7 @@ if active_tab == "Overview":
         st.title("Campus Energy Dashboard")
         st.markdown(
             '<p style="font-size:1.05rem;color:#6b7280;margin-top:2px;line-height:1.5;">'
-            'Weekly electricity use across campus buildings — sourced from FTP interval meters.</p>',
+            'Daily energy use (electricity + thermal) across campus buildings — sourced from FTP interval meters.</p>',
             unsafe_allow_html=True)
     with hcol_r:
         if len(sorted_sel) == 1:
@@ -483,11 +483,11 @@ if active_tab == "Overview":
     k1, k2, k3 = st.columns(3)
 
     k1.metric(
-        f"Total Campus Electricity — {period_label(latest_week)}",
+        f"Total Campus Energy — {period_label(latest_week)}",
         fmt_kwh(campus_cur))
 
     k2.metric(
-        f"Estimated Electricity Cost  (@ ${ENERGY_RATE}/kWh)",
+        f"Estimated Energy Cost  (@ ${ENERGY_RATE}/kWh equiv)",
         fmt_cost(campus_cost))
 
     if prev_week and pct_change is not None:
@@ -503,7 +503,7 @@ if active_tab == "Overview":
 
     # ── CAMPUS TOTAL CHART — top of page ────────────────────────────────────
     if len(sorted_sel) >= 2:
-        st.markdown(f'<div class="sec-label">Total Campus Electricity — All Selected Periods</div>',
+        st.markdown(f'<div class="sec-label">Total Campus Energy — All Selected Periods</div>',
                     unsafe_allow_html=True)
 
         campus_by_week = (by_bld[by_bld["week"].isin(sorted_sel)]
@@ -572,7 +572,7 @@ if active_tab == "Overview":
 
         bm1, bm2 = st.columns(2)
         bm1.metric(
-            f"Electricity — {period_label(latest_week)}",
+            f"Energy — {period_label(latest_week)}",
             fmt_kwh(b_cur))
         bm2.metric(
             f"Estimated Cost  (@ ${ENERGY_RATE}/kWh)",
@@ -706,7 +706,7 @@ if active_tab == "Overview":
             st.plotly_chart(fig_trend, use_container_width=True)
 
     with side_col:
-        # ── Top Buildings by Electricity ─────────────────────────────────────
+        # ── Top Buildings by Energy ──────────────────────────────────────────
         top_blds = (by_bld[by_bld["week"] == latest_week]
                     .sort_values("kWh", ascending=False))
         max_kwh_top = float(top_blds["kWh"].max()) if not top_blds.empty else 1.0
@@ -717,7 +717,7 @@ if active_tab == "Overview":
 
         st.markdown(
             f'<div class="card">'
-            f'<div class="card-title">Top Buildings by Electricity</div>'
+            f'<div class="card-title">Top Buildings by Energy</div>'
             f'<div class="card-sub">{period_label(latest_week)}</div>'
             f'{bars_html}'
             f'</div>',
@@ -732,9 +732,9 @@ if active_tab == "Overview":
             '<div style="font-size:0.95rem;color:#374151;line-height:1.9;margin-top:6px;">'
             f'<b>Reporting buildings:</b> {len(top_blds)}<br>'
             f'<b>Missing data:</b> 8 buildings<br>'
-            f'<b>Electricity rate:</b> ${ENERGY_RATE}/kWh (estimated)<br>'
+            f'<b>Energy rate:</b> ${ENERGY_RATE}/kWh equiv (estimated)<br>'
             f'<b>Source:</b> FTP interval meters<br>'
-            f'<b>Updated:</b> Weekly, Mon 6 AM<br>'
+            f'<b>Updated:</b> Daily, 6 AM<br>'
             f'<b>Note:</b> Wine Spectator kWh is ~4× understated due to sensor gaps.'
             '</div></div>',
             unsafe_allow_html=True)
@@ -950,12 +950,18 @@ elif active_tab == "DataIntegrity":
         'Full sensor registry, verified data, gap analysis, and deployment notes.</p>',
         unsafe_allow_html=True)
 
-    st.markdown('<div class="sec-label">Verified Data — Week of Feb 2–8, 2026 (from pipeline DB)</div>',
-                unsafe_allow_html=True)
+    # Load raw CSV and filter to latest week only
+    _di_raw = pd.read_csv(WEEKLY_CSV)
+    _di_raw["week"] = _di_raw["week"].astype(str).str.strip()
+    _di_latest = sorted(_di_raw["week"].unique())[-1]
+    wdf = _di_raw[_di_raw["week"] == _di_latest].sort_values("kWh", ascending=False)
 
-    wdf = pd.read_csv(WEEKLY_CSV).sort_values("kWh", ascending=False)
+    st.markdown(
+        f'<div class="sec-label">Verified Data — {week_label(_di_latest)}</div>',
+        unsafe_allow_html=True)
+
     v_tbl = ('<table class="di-table"><thead><tr>'
-             '<th>Building</th><th>kWh (week)</th><th>MWh</th><th>Est. Cost @ $0.15/kWh</th><th>Status</th>'
+             '<th>Building</th><th>kWh</th><th>MWh</th><th>Est. Energy Cost @ $0.15/kWh equiv</th><th>Status</th>'
              '</tr></thead><tbody>')
     total_kwh = 0.0
     for _, r in wdf.iterrows():
@@ -979,10 +985,11 @@ elif active_tab == "DataIntegrity":
     st.markdown(f'<div class="card">{v_tbl}</div>', unsafe_allow_html=True)
 
     st.markdown(
-        '<div style="font-size:0.85rem;color:#9ca3af;margin-top:8px;margin-bottom:4px;">'
-        'Source: pipeline DB (energy_usage table). Week covers Mon Feb 2 through Sun Feb 8, 2026. '
-        'Rachel Carson Hall kWh (12,436) comes from Feb 2–5 DB records — raw interval files only cover Feb 6–11.'
-        '</div>', unsafe_allow_html=True)
+        f'<div style="font-size:0.85rem;color:#9ca3af;margin-top:8px;margin-bottom:4px;">'
+        f'Showing most recent week: {week_label(_di_latest)}. '
+        f'kWh includes both electric meters and thermal energy sensors (heating &amp; cooling loops) '
+        f'converted to kWh. Gas and water meters currently have no data available.'
+        f'</div>', unsafe_allow_html=True)
 
     # Utility coverage — moved here from overview
     st.markdown('<div class="sec-label">Utility Coverage</div>', unsafe_allow_html=True)
@@ -997,16 +1004,16 @@ elif active_tab == "DataIntegrity":
     u2.markdown(
         '<div class="card"><div class="card-title">🔥 Gas</div>'
         '<div style="font-size:0.95rem;color:#374151;line-height:1.8;margin-top:6px;">'
-        '<b>Status:</b> Missing Data<br>'
+        '<b>Status:</b> No data available<br>'
         '<b>Meters:</b> Boiler Plant, Green Music Center, Schulz Info Center<br>'
-        '<b>Note:</b> 100% missing from FTP interval files'
+        '<b>Note:</b> Meters registered but no readings received'
         '</div></div>', unsafe_allow_html=True)
     u3.markdown(
         '<div class="card"><div class="card-title">💧 Water</div>'
         '<div style="font-size:0.95rem;color:#374151;line-height:1.8;margin-top:6px;">'
-        '<b>Status:</b> Missing Data<br>'
-        '<b>Meter:</b> Green Music Center (234aa782-f7b1eef2)<br>'
-        '<b>Note:</b> Meter present but all values are empty'
+        '<b>Status:</b> No data available<br>'
+        '<b>Meter:</b> Green Music Center<br>'
+        '<b>Note:</b> Meter registered but no readings received'
         '</div></div>', unsafe_allow_html=True)
 
     # Full sensor registry
@@ -1029,37 +1036,24 @@ elif active_tab == "DataIntegrity":
     st.markdown('<div class="sec-label">Unit Conversions Applied</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="card">'
-        '<div style="font-size:0.95rem;color:#374151;line-height:2;">'
-        '<code>BTU × 0.000293071 = kWh</code><br>'
-        '<code>kBTU × 0.293071 = kWh</code>  (sensor 234aa956 labelled _MBTU in FTP but values are kBTU scale)<br>'
-        '<code>therm × 29.3071 = kWh</code><br>'
-        '<code>kWh → kWh direct</code><br>'
-        '<code>Water (gallon) → stored raw, no conversion</code>'
+        '<div style="font-size:0.95rem;color:#374151;line-height:2.2;">'
+        '<span style="display:inline-block;background:#e8eef5;color:#1b3a5c;font-weight:600;'
+        'padding:2px 12px;border-radius:6px;font-family:Inter,sans-serif;">BTU × 0.000293071 = kWh</span><br>'
+        '<span style="display:inline-block;background:#e8eef5;color:#1b3a5c;font-weight:600;'
+        'padding:2px 12px;border-radius:6px;font-family:Inter,sans-serif;">kBTU × 0.293071 = kWh</span><br>'
+        '<span style="display:inline-block;background:#e8eef5;color:#1b3a5c;font-weight:600;'
+        'padding:2px 12px;border-radius:6px;font-family:Inter,sans-serif;">therm × 29.3071 = kWh</span><br>'
+        '<span style="display:inline-block;background:#e8eef5;color:#1b3a5c;font-weight:600;'
+        'padding:2px 12px;border-radius:6px;font-family:Inter,sans-serif;">kWh → kWh direct</span><br>'
+        '<span style="display:inline-block;background:#e8eef5;color:#1b3a5c;font-weight:600;'
+        'padding:2px 12px;border-radius:6px;font-family:Inter,sans-serif;">Water (gallon) → stored as-is, no conversion</span>'
         '</div></div>', unsafe_allow_html=True)
 
-    # Deployment
-    st.markdown('<div class="sec-label">Deployment & Pipeline</div>', unsafe_allow_html=True)
-    d1, d2 = st.columns(2)
-    d1.markdown(
-        '<div class="card"><div class="card-title">🚀 Best Deployment Method</div>'
-        '<div style="font-size:0.95rem;color:#374151;line-height:1.9;margin-top:6px;">'
-        '<b>Streamlit Community Cloud (recommended — free)</b><br>'
-        '1. Push this file + weekly_energy.csv to GitHub<br>'
-        '2. Go to share.streamlit.io<br>'
-        '3. Connect repo → deploy → get a public URL<br><br>'
-        '<b>DigitalOcean / Hostinger (paid, full control)</b><br>'
-        '1. Create Ubuntu server<br>'
-        '2. <code>pip install streamlit plotly pandas</code><br>'
-        '3. Run behind nginx reverse proxy<br>'
-        '4. Add cron job for pipeline'
-        '</div></div>', unsafe_allow_html=True)
-    d2.markdown(
-        '<div class="card"><div class="card-title">🔄 Pipeline Schedule</div>'
-        '<div style="font-size:0.95rem;color:#374151;line-height:1.9;margin-top:6px;">'
-        '<b>Current:</b> Weekly, Monday 6 AM (Windows Task Scheduler)<br><br>'
-        '<b>To run daily:</b> Change Task Scheduler trigger to Daily<br>'
-        'Pipeline already handles date-named files (e.g. 20260317.csv)<br><br>'
-        '<b>Flow:</b> FTP download → normalize → MySQL insert<br>'
-        '→ weekly_energy.csv regenerated → dashboard auto-refreshes (5 min TTL)<br><br>'
+    # Pipeline info
+    st.markdown('<div class="sec-label">Pipeline</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="card">'
+        '<div style="font-size:0.95rem;color:#374151;line-height:1.9;">'
+        '<b>Schedule:</b> Daily, 6 AM (cron job)<br>'
         '<b>DB:</b> 193.203.166.234 | u209446640_SSUEnergy'
         '</div></div>', unsafe_allow_html=True)
