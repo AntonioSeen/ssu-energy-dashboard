@@ -424,28 +424,7 @@ def load_daily_data() -> pd.DataFrame:
         combined_rows += raw_df[["date", "building", "kWh", "gas_therm", "water_gallon"]].to_dict("records")
 
     if not combined_rows:
-        # ── Fallback: load weekly_energy.csv and expand to daily rows ──────────
-        WEEKLY_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weekly_energy.csv")
-        if os.path.exists(WEEKLY_CSV):
-            w = pd.read_csv(WEEKLY_CSV)
-            # Ensure required columns exist
-            for col in ("gas_therm", "water_gallon"):
-                if col not in w.columns:
-                    w[col] = 0.0
-            w["date"] = pd.to_datetime(w["week"], errors="coerce")
-            w = w.dropna(subset=["date"])
-            w = w.rename(columns={"kWh": "kWh"})
-            fallback_rows = w[["date", "building", "kWh", "gas_therm", "water_gallon"]].copy()
-            fallback_rows["date"] = fallback_rows["date"].dt.normalize()
-            fallback_rows = fallback_rows[fallback_rows["kWh"] > 0]
-            if not fallback_rows.empty:
-                daily = fallback_rows.groupby(["date", "building"]).agg(
-                    kWh=("kWh", "sum"),
-                    gas_therm=("gas_therm", "sum"),
-                    water_gallon=("water_gallon", "sum"),
-                ).reset_index()
-                return daily, set()
-        return pd.DataFrame(columns=["date", "building", "kWh", "gas_therm", "water_gallon"]), set()
+        return pd.DataFrame(columns=["date", "building", "kWh", "gas_therm", "water_gallon"])
 
     daily = pd.DataFrame(combined_rows)
     daily["date"] = pd.to_datetime(daily["date"], errors="coerce")
