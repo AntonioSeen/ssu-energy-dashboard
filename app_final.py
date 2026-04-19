@@ -24,6 +24,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from app_data_loader import load_weekly
+
 st.set_page_config(
     page_title="SSU Campus Energy Dashboard",
     layout="wide",
@@ -443,32 +445,19 @@ def load_daily_data() -> pd.DataFrame:
 @st.cache_data(ttl=300, show_spinner=False)
 def load_data() -> pd.DataFrame:
     """
-    Aggregate daily data to weekly buckets (ISO: Monday = week start).
-    Returns DataFrame with columns:
-        week, building, kWh, gas_therm, water_gallon, heating_dd, normalized_kWh
+    Read weekly_energy.csv directly (new pipeline output).
+    Returns (weekly_df, raw_dates) to preserve the old tuple signature.
     """
-    daily_result = load_daily_data()
-    if isinstance(daily_result, tuple):
-        daily, raw_dates = daily_result
-    else:
-        daily, raw_dates = daily_result, set()
-
-    if daily.empty:
+    weekly = load_weekly()
+    if weekly.empty:
         return pd.DataFrame(columns=["week", "building", "kWh", "gas_therm", "water_gallon",
-                                     "heating_dd", "normalized_kWh"])
-
-    daily["_weekstart"] = (daily["date"] - pd.to_timedelta(daily["date"].dt.weekday, unit="D")).dt.date.astype(str)
-
-    weekly = (
-        daily.groupby(["_weekstart", "building"])
-        .agg(kWh=("kWh", "sum"), gas_therm=("gas_therm", "sum"), water_gallon=("water_gallon", "sum"))
-        .reset_index()
-        .rename(columns={"_weekstart": "week"})
-    )
-    weekly["heating_dd"]     = 0.0
-    weekly["normalized_kWh"] = weekly["kWh"]
+                                     "heating_dd", "normalized_kWh"]), set()
+    # Ensure week is a string (YYYY-MM-DD) for downstream comparisons
+    if pd.api.types.is_datetime64_any_dtype(weekly["week"]):
+        weekly = weekly.copy()
+        weekly["week"] = weekly["week"].dt.date.astype(str)
     weekly = weekly[weekly["kWh"] > 0].copy()
-    return weekly, raw_dates
+    return weekly, set()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -597,7 +586,7 @@ else:
     df_all, _raw_dates_loaded = _load_result, set()
 
 if df_all.empty:
-    st.error("No energy data found. Place daily_energy.csv and/or raw CSV files "
+    st.error("No energy data found. Place weekly_energy.csv and/or raw CSV files "
              "(YYYYMMDD.csv / YYYYMMDDint.csv) in the same folder as app.py.")
     st.stop()
 
@@ -1237,7 +1226,7 @@ elif active_tab == "DataIntegrity":
             f'<div class="alert-green">'
             f'✅ <b>Live Raw Data Active:</b> {_n_raw_files} raw CSV file(s) processed directly '
             f'using pipeline cleaning logic. Weeks sourced from raw files: <b>{_weeks_str_di}</b>. '
-            f'All other weeks use daily_energy.csv.</div>',
+            f'All other weeks use weekly_energy.csv.</div>',
             unsafe_allow_html=True)
 
     # Latest week verified data table
