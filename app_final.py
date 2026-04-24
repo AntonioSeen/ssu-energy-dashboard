@@ -24,6 +24,21 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+# ─── Logo loader ──────────────────────────────────────────────────────────────
+# Load the header banner from a PNG in the same folder as this script, rather
+# than embedding a large base64 blob inline. Both _LOGO_B64_LB (Leaderboard)
+# and _LOGO_B64_DI (Data Integrity) point to the same image.
+def _load_logo_b64() -> str:
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard_header.png")
+    try:
+        with open(logo_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("ascii")
+    except FileNotFoundError:
+        return ""
+
+_LOGO_B64_LB = _load_logo_b64()
+_LOGO_B64_DI = _LOGO_B64_LB
+
 def load_weekly() -> pd.DataFrame:
     """
     Read weekly_energy.csv from the same directory as this script.
@@ -35,15 +50,18 @@ def load_weekly() -> pd.DataFrame:
     base = os.path.dirname(os.path.abspath(__file__))
     csv_path = os.path.join(base, "weekly_energy.csv")
     if not os.path.exists(csv_path):
-        return pd.DataFrame(columns=["week", "building", "kWh", "gas_therm",
-                                     "water_gallon", "heating_dd", "normalized_kWh"])
+        return pd.DataFrame(columns=["week", "building", "kWh", "thermal_kWh",
+                                     "gas_therm", "water_gallon",
+                                     "heating_dd", "normalized_kWh"])
     df = pd.read_csv(csv_path, low_memory=False)
     # Normalise week column — accept YYYY-MM-DD or YYYY-MM-DD/YYYY-MM-DD
     df["week"] = df["week"].astype(str).str.strip().str.split("/").str[0]
     df["week"] = pd.to_datetime(df["week"], errors="coerce").dt.strftime("%Y-%m-%d")
     df = df.dropna(subset=["week"]).copy()
-    # Ensure numeric columns
-    for col in ["kWh", "gas_therm", "water_gallon", "heating_dd", "normalized_kWh"]:
+    # Ensure numeric columns. thermal_kWh is optional — older weekly_energy.csv
+    # files (pre-pipeline-update) don't have it; we default to 0 so the
+    # runtime raw-CSV fallback can fill it in.
+    for col in ["kWh", "thermal_kWh", "gas_therm", "water_gallon", "heating_dd", "normalized_kWh"]:
         if col not in df.columns:
             df[col] = 0.0
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
@@ -346,6 +364,11 @@ def _process_one_csv(filepath: str) -> dict:
             if final_unit in ENERGY_UNITS:
                 kwh = val_n * UNIT_TO_KWH[final_unit]
                 acc[date_str][building]["kWh"] += kwh
+                # Thermal accounting matches master_pipeline.generate_weekly_csv:
+                # any energy unit other than kWh is a thermal loop (BTU/kBTU/
+                # MBTU = heating/cooling, tonref = chiller output).
+                if final_unit != "kWh":
+                    acc[date_str][building]["thermal_kWh"] += kwh
             elif final_unit == "therm":
                 acc[date_str][building]["therm"] += val_n
             elif final_unit == "gallon":
@@ -356,26 +379,36 @@ def _process_one_csv(filepath: str) -> dict:
 
 def _find_raw_csv_files() -> list[str]:
     """
-    Scan for raw CSV files matching YYYYMMDD.csv or YYYYMMDDint.csv in:
+    Scan for raw CSV files matching YYYYMMDD.csv / YYYYMMDDint.csv / YYYYMMDDpge.csv.
+
+    Searches recursively in these roots (all optional — missing roots skipped):
       - same directory as this script
       - ./raw_data/
-      - ./uploads/
-    Returns sorted list of absolute paths.
+      - ./uploads/          (pipeline's pre-processing staging area)
+      - ./processed/        (pipeline's post-processing archive — critical for
+                             keeping thermal_kWh accurate after the pipeline
+                             moves files out of uploads/)
+
+    Deduplicates by filename so the same CSV appearing in multiple search roots
+    (e.g. moved from uploads/ to processed/ during a pipeline run) is only
+    processed once.
     """
     base = os.path.dirname(os.path.abspath(__file__))
-    search_dirs = [
+    search_roots = [
         base,
         os.path.join(base, "raw_data"),
         os.path.join(base, "uploads"),
+        os.path.join(base, "processed"),
     ]
-    found = set()
-    for d in search_dirs:
-        if not os.path.isdir(d):
+    found_by_name: dict = {}
+    for root in search_roots:
+        if not os.path.isdir(root):
             continue
-        for fname in os.listdir(d):
-            if _RAW_CSV_RE.match(fname):
-                found.add(os.path.join(d, fname))
-    return sorted(found)
+        for dirpath, _dirs, files in os.walk(root):
+            for fname in files:
+                if _RAW_CSV_RE.match(fname) and fname not in found_by_name:
+                    found_by_name[fname] = os.path.join(dirpath, fname)
+    return sorted(found_by_name.values())
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -389,7 +422,8 @@ def _process_raw_csvs() -> tuple[pd.DataFrame, set]:
     """
     files = _find_raw_csv_files()
     if not files:
-        return pd.DataFrame(columns=["date", "building", "kWh", "gas_therm", "water_gallon"]), set()
+        return pd.DataFrame(columns=["date", "building", "kWh", "thermal_kWh",
+                                     "gas_therm", "water_gallon"]), set()
 
     # Merge results from all files; same-date same-building values are summed
     merged: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
@@ -408,6 +442,7 @@ def _process_raw_csvs() -> tuple[pd.DataFrame, set]:
                 "date":         date_str,
                 "building":     building,
                 "kWh":          round(ub.get("kWh", 0.0), 6),
+                "thermal_kWh":  round(ub.get("thermal_kWh", 0.0), 6),
                 "gas_therm":    round(ub.get("therm", 0.0), 6),
                 "water_gallon": round(ub.get("gallon", 0.0), 6),
             })
@@ -436,20 +471,25 @@ def load_daily_data() -> pd.DataFrame:
     hist_rows = []
     if os.path.exists(DAILY_CSV):
         hist = pd.read_csv(DAILY_CSV)
-        for col in ("gas_therm", "water_gallon"):
+        for col in ("gas_therm", "water_gallon", "thermal_kWh"):
             if col not in hist.columns:
+                # Historical daily_energy.csv doesn't carry thermal split — default to 0.
+                # Accurate thermal is only available for weeks covered by raw CSVs.
                 hist[col] = 0.0
         hist["date"] = hist["date"].astype(str).str.strip()
         # Only keep dates NOT covered by raw CSVs
         hist_filtered = hist[~hist["date"].isin(raw_dates)].copy()
-        hist_rows = hist_filtered[["date", "building", "kWh", "gas_therm", "water_gallon"]].to_dict("records")
+        hist_rows = hist_filtered[["date", "building", "kWh", "thermal_kWh",
+                                    "gas_therm", "water_gallon"]].to_dict("records")
 
     combined_rows = hist_rows
     if not raw_df.empty:
-        combined_rows += raw_df[["date", "building", "kWh", "gas_therm", "water_gallon"]].to_dict("records")
+        combined_rows += raw_df[["date", "building", "kWh", "thermal_kWh",
+                                  "gas_therm", "water_gallon"]].to_dict("records")
 
     if not combined_rows:
-        return pd.DataFrame(columns=["date", "building", "kWh", "gas_therm", "water_gallon"])
+        return pd.DataFrame(columns=["date", "building", "kWh", "thermal_kWh",
+                                      "gas_therm", "water_gallon"]), raw_dates
 
     daily = pd.DataFrame(combined_rows)
     daily["date"] = pd.to_datetime(daily["date"], errors="coerce")
@@ -458,7 +498,10 @@ def load_daily_data() -> pd.DataFrame:
     # Aggregate (in case both sources overlap after filtering — shouldn't, but safe)
     daily = (
         daily.groupby(["date", "building"])
-        .agg(kWh=("kWh", "sum"), gas_therm=("gas_therm", "sum"), water_gallon=("water_gallon", "sum"))
+        .agg(kWh=("kWh", "sum"),
+             thermal_kWh=("thermal_kWh", "sum"),
+             gas_therm=("gas_therm", "sum"),
+             water_gallon=("water_gallon", "sum"))
         .reset_index()
     )
     daily = daily[daily["kWh"] >= 0].copy()
@@ -473,7 +516,8 @@ def load_data() -> pd.DataFrame:
     """
     weekly = load_weekly()
     if weekly.empty:
-        return pd.DataFrame(columns=["week", "building", "kWh", "gas_therm", "water_gallon",
+        return pd.DataFrame(columns=["week", "building", "kWh", "thermal_kWh",
+                                     "gas_therm", "water_gallon",
                                      "heating_dd", "normalized_kWh"]), set()
     # Ensure week is a string (YYYY-MM-DD) for downstream comparisons
     if pd.api.types.is_datetime64_any_dtype(weekly["week"]):
@@ -620,6 +664,33 @@ _daily_result = load_daily_data()
 _daily_df = _daily_result[0] if isinstance(_daily_result, tuple) else _daily_result
 _raw_dates_loaded = _daily_result[1] if isinstance(_daily_result, tuple) else set()
 
+# ── Thermal kWh resolution ────────────────────────────────────────────────
+# Priority order for the thermal_kWh value at each (week, building):
+#   1. weekly_energy.csv's thermal_kWh (authoritative — set by updated pipeline)
+#   2. Runtime computation from raw CSVs (fallback for historical weeks or
+#      for deployments where weekly_energy.csv predates the pipeline update)
+# Element-wise max gives the correct value in every case:
+#   - weekly=X, raw=X → X (they agree)
+#   - weekly=X, raw=0 → X (no raw CSV present, but weekly knows)
+#   - weekly=0, raw=X → X (old CSV, raw fills the gap)
+#   - weekly=0, raw=0 → 0 (no data, honest)
+# kWh totals are untouched in every branch.
+if not _daily_df.empty and "thermal_kWh" in _daily_df.columns:
+    _wk = _daily_df.copy()
+    # Monday-of-ISO-week, matching master_pipeline's SQL week definition
+    _wk["week"] = (_wk["date"] - pd.to_timedelta(_wk["date"].dt.dayofweek, unit="D")).dt.strftime("%Y-%m-%d")
+    _th_by_wk_bld = (
+        _wk.groupby(["week", "building"])["thermal_kWh"].sum()
+        .reset_index()
+        .rename(columns={"thermal_kWh": "_thermal_kWh_raw"})
+    )
+    df_all = df_all.merge(_th_by_wk_bld, on=["week", "building"], how="left")
+    df_all["_thermal_kWh_raw"] = df_all["_thermal_kWh_raw"].fillna(0.0)
+    df_all["thermal_kWh"] = df_all[["thermal_kWh", "_thermal_kWh_raw"]].max(axis=1)
+    df_all = df_all.drop(columns=["_thermal_kWh_raw"])
+# If no raw CSVs are available, df_all["thermal_kWh"] already has the correct
+# values from weekly_energy.csv (or 0.0 if the pipeline hasn't been updated yet).
+
 def _week_has_raw(w):
     try:
         start = pd.to_datetime(str(w))
@@ -638,28 +709,49 @@ _n_raw_files = len(_find_raw_csv_files())
 with st.sidebar:
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
-    # Data source banner
-    if _n_raw_files > 0:
-        st.markdown(
-            f'<div style="background:rgba(59,130,246,0.15);border-radius:8px;padding:8px 12px;'
-            f'margin-bottom:12px;font-size:0.82rem;color:#93c5fd;font-weight:600;">'
-            f'⚡ {_n_raw_files} raw CSV file{"s" if _n_raw_files != 1 else ""} loaded<br>'
-            f'<span style="font-weight:400;color:#7ab4d4">{len(_raw_dates_loaded)} date(s) from raw CSVs</span>'
-            f'</div>',
-            unsafe_allow_html=True)
-
-    # Red-border style for all sidebar dropdowns/selectboxes/multiselects
+    # Sidebar dropdown styling: all dropdowns share the same dark outer look.
+    # Multiselect pills stay red; selectbox value reads directly on dark background.
     st.markdown("""
 <style>
-section[data-testid="stSidebar"] .stSelectbox > div > div,
-section[data-testid="stSidebar"] .stMultiSelect > div > div[data-baseweb="select"] {
-    border: 2px solid #dc2626 !important;
+/* SELECTBOX outer — dark container with subtle blue border (matches multiselect) */
+section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
+    background-color: transparent !important;
+    border: 1px solid #2a5180 !important;
     border-radius: 6px !important;
 }
-section[data-testid="stSidebar"] .stSelectbox > div > div > div,
+/* SELECTBOX value text — white, no pill background */
+section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div > div,
+section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div > div *,
+section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] input {
+    background-color: transparent !important;
+    color: #ffffff !important;
+}
+/* SELECTBOX chevron — white */
+section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] svg {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+/* MULTISELECT outer — subtle dark border */
+section[data-testid="stSidebar"] .stMultiSelect > div > div[data-baseweb="select"] {
+    border: 1px solid #2a5180 !important;
+    border-radius: 6px !important;
+}
 section[data-testid="stSidebar"] .stMultiSelect > div > div[data-baseweb="select"] > div {
     color: #ffffff !important;
 }
+/* MULTISELECT pills — filled red with white text */
+section[data-testid="stSidebar"] .stMultiSelect span[data-baseweb="tag"] {
+    background-color: #dc2626 !important;
+    border-color: #dc2626 !important;
+}
+section[data-testid="stSidebar"] .stMultiSelect span[data-baseweb="tag"] span {
+    color: #ffffff !important;
+}
+section[data-testid="stSidebar"] .stMultiSelect span[data-baseweb="tag"] svg {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
+/* Sidebar headings */
 section[data-testid="stSidebar"] h1,
 section[data-testid="stSidebar"] h2,
 section[data-testid="stSidebar"] h3,
@@ -755,41 +847,24 @@ section[data-testid="stSidebar"] .sidebar-title {
     # ── BUILDING DETAIL ──────────────────────────────────────────────────────
     st.markdown('<p style="color:#4dabf7;font-size:1.25rem;font-weight:800;margin-bottom:4px;">Building Detail</p>', unsafe_allow_html=True)
 
-    # We need the building list — compute ahead of the main page body
-    # It will be reused in the Overview section too
+    # Compute the building list once here — all buildings that have ever reported
+    # data, sorted by total kWh (highest first). This drives the Overview and
+    # Thermal pages.
     _sidebar_bld_options = []
     if all_weeks:
         _temp_by_bld = df_all.groupby(["week", "building"])["kWh"].sum().reset_index()
         _all_bld_kwh = _temp_by_bld.groupby("building")["kWh"].sum().sort_values(ascending=False).reset_index()
         _sidebar_bld_options = _all_bld_kwh["building"].tolist()
 
-    _sidebar_sel_bld = st.selectbox(
-        "sidebar_bld_detail",
-        ["(None)"] + _sidebar_bld_options,
-        index=0,
-        label_visibility="collapsed"
-    )
-
-    # Show building summary card in sidebar if a building is selected
-    if _sidebar_sel_bld and _sidebar_sel_bld != "(None)" and all_weeks:
-        _sb_latest = all_weeks[-1]
-        _sb_bld_by_week = df_all[df_all["building"] == _sidebar_sel_bld].groupby("week")["kWh"].sum()
-        _sb_latest_kwh = float(_sb_bld_by_week.get(_sb_latest, 0.0))
-        _sb_cost = _sb_latest_kwh * ENERGY_RATE
-        _sb_start = pd.to_datetime(_sb_latest)
-        _sb_end   = _sb_start + pd.Timedelta(days=6)
-        _sb_range = f"{_sb_start.strftime('%b %-d')} – {_sb_end.strftime('%b %-d, %Y')}"
-        st.markdown(
-            f'<div style="background:#132d4a;border:1px solid #2a5180;border-radius:8px;'
-            f'padding:10px 12px;margin-top:6px;">'
-            f'<div style="font-size:0.72rem;font-weight:700;color:#a3bcd0;text-transform:uppercase;'
-            f'letter-spacing:0.1em;">{_sidebar_sel_bld} — {_sb_range}</div>'
-            f'<div style="font-size:1.2rem;font-weight:800;color:#ffffff;margin-top:4px;">'
-            f'{_sb_latest_kwh/1000:.1f} MWh</div>'
-            f'<div style="font-size:0.85rem;font-weight:700;color:#93c5fd;margin-top:2px;">'
-            f'Est. Cost: ${_sb_cost:,.0f} @ ${ENERGY_RATE:.2f}/kWh</div>'
-            f'</div>',
-            unsafe_allow_html=True)
+    if _sidebar_bld_options:
+        _sidebar_sel_bld = st.selectbox(
+            "sidebar_bld_detail",
+            _sidebar_bld_options,
+            index=0,
+            label_visibility="collapsed"
+        )
+    else:
+        _sidebar_sel_bld = None
 
     st.markdown("---")
 
@@ -993,25 +1068,28 @@ if active_tab == "Overview":
             fig_all.update_xaxes(tickfont=dict(size=17, color="#111827", family="Inter", weight=700))
             st.plotly_chart(fig_all, use_container_width=True)
 
-        # Building detail
-        st.markdown('<div class="sec-label">Building Detail — Select a Building to View Details</div>', unsafe_allow_html=True)
+        # Building detail — driven by the sidebar "Building Detail" selector
+        sel_bld = _sidebar_sel_bld
+        st.markdown(
+            f'<div class="sec-label">Building Detail — {sel_bld if sel_bld else "No building selected"}</div>',
+            unsafe_allow_html=True)
+        st.markdown(
+            '<p style="font-size:0.88rem;color:#6b7280;margin-top:-6px;margin-bottom:10px;">'
+            'Use the <b>Building Detail</b> dropdown in the sidebar to switch buildings.</p>',
+            unsafe_allow_html=True)
 
-        # Build dropdown from ALL buildings present in ANY selected period,
-        # sorted by total kWh across all selected periods (highest first).
+        if not sel_bld:
+            st.info("No buildings available — no data in the current dataset.")
+            st.stop()
+
+        # Keep these lookups for use by metric cards / trends below
         bld_kwh_all_sel = (by_bld[by_bld["week"].isin(sorted_sel)]
                            .groupby("building")["kWh"].sum()
                            .sort_values(ascending=False)
                            .reset_index())
         bld_order = bld_kwh_all_sel["building"].tolist()
-        # Metric cards still reflect the latest selected week (0 if no data that week)
         bld_kwh_lkp = (by_bld[by_bld["week"] == latest_week]
                        .set_index("building")["kWh"].to_dict())
-
-        sel_bld = st.selectbox(
-            "Select a building (sorted highest to lowest kWh)",
-            bld_order, index=0,
-            format_func=lambda b: b,
-            label_visibility="collapsed")
 
         if BUILDINGS_STATUS.get(sel_bld, "ok") == "review":
             st.markdown(
@@ -1301,43 +1379,31 @@ elif active_tab == "Thermal":
         'Thermal includes heating hot water and chilled water cooling loops.</p>',
         unsafe_allow_html=True)
 
-    # ── Thermal conversion note ──────────────────────────────────────────────
-    # Thermal kWh comes from BTU and kBTU sensors in df_all (already converted by pipeline).
-    # We identify thermal buildings as those that ONLY have BTU/kBTU sources (no direct kWh electric meter)
-    # vs electric buildings. The pipeline stores everything in kWh already, so we use
-    # the SENSOR_REGISTRY to classify each building's contribution.
+    # ── Thermal classification ───────────────────────────────────────────────
+    # The thermal_kWh column is pre-computed per (week, building) from the raw
+    # CSVs — it contains ONLY energy from BTU/kBTU/MBTU sensors (heating hot
+    # water + chilled water loops). This is the correct sensor-level split and
+    # avoids misattributing a building's electric usage to thermal just because
+    # the building also has thermal meters (e.g. Green Music Center).
 
-    # Buildings with thermal sensors
+    # Buildings that have at least one thermal sensor — used for the per-building
+    # breakdown chart (so we show only buildings with thermal meters installed).
     _thermal_buildings = set()
-    _electric_buildings = set()
     for _b, _sid, _util, _unit, _st, _notes in SENSOR_REGISTRY:
         if _util == "Thermal" and _st == "OK":
             _thermal_buildings.add(_b)
-        if _util == "Electric" and _st == "OK":
-            _electric_buildings.add(_b)
 
-    # BTU conversion factor used in pipeline (1 BTU = 0.000293071 kWh)
-    # Thermal fraction: approximate — buildings with thermal sensors contribute their kWh
-    # as thermal. We compute per-building totals from df_all.
-    # Since thermal and electric are summed into kWh in df_all already,
-    # we split by building type using the registry.
-
-    # All-time monthly thermal data
+    # All-time monthly thermal data — uses thermal_kWh column directly
     _th_at = df_all.dropna(subset=["_wstart"]).copy()
     _th_at["_month"] = _th_at["_wstart"].dt.to_period("M")
 
-    _th_thermal = _th_at[_th_at["building"].isin(_thermal_buildings)]
-    _th_electric = _th_at[_th_at["building"].isin(_electric_buildings) & ~_th_at["building"].isin(_thermal_buildings)]
-    _th_all_monthly = _th_at.groupby("_month")["kWh"].sum().reset_index().sort_values("_month")
-    _th_therm_monthly = _th_thermal.groupby("_month")["kWh"].sum().reset_index().sort_values("_month")
+    _th_all_monthly = _th_at.groupby("_month").agg(
+        total_kWh=("kWh", "sum"),
+        thermal_kWh=("thermal_kWh", "sum"),
+    ).reset_index().sort_values("_month")
 
     _th_all_monthly["_label"] = _th_all_monthly["_month"].dt.strftime("%b %Y")
-    _th_therm_monthly = _th_therm_monthly.rename(columns={"kWh": "thermal_kWh"})
-    _th_merged = pd.merge(
-        _th_all_monthly.rename(columns={"kWh": "total_kWh"}),
-        _th_therm_monthly[["_month", "thermal_kWh"]],
-        on="_month", how="left"
-    ).fillna({"thermal_kWh": 0.0})
+    _th_merged = _th_all_monthly.copy()
     _th_merged["electric_kWh"] = (_th_merged["total_kWh"] - _th_merged["thermal_kWh"]).clip(lower=0)
     _th_merged["thermal_pct"] = (_th_merged["thermal_kWh"] / _th_merged["total_kWh"].replace(0, float("nan")) * 100).fillna(0)
 
@@ -1408,11 +1474,15 @@ elif active_tab == "Thermal":
     if selected_weeks:
         st.markdown('<div class="sec-label">Thermal Breakdown — Selected Periods</div>', unsafe_allow_html=True)
         _th_sel = df_view[df_view["week"].isin(sorted_sel)].copy()
-        _th_bld = _th_sel.groupby("building")["kWh"].sum().reset_index()
-        _th_bld["is_thermal"] = _th_bld["building"].isin(_thermal_buildings)
-        _th_bld_thermal = _th_bld[_th_bld["is_thermal"]].sort_values("kWh", ascending=False)
+        # Aggregate per building, keeping BOTH total kWh and true thermal kWh.
+        _th_bld = _th_sel.groupby("building").agg(
+            kWh=("kWh", "sum"),
+            thermal_kWh=("thermal_kWh", "sum"),
+        ).reset_index()
+        # Show only buildings that actually reported thermal energy.
+        _th_bld_thermal = _th_bld[_th_bld["thermal_kWh"] > 0].sort_values("thermal_kWh", ascending=False)
         _th_bld_total = float(_th_bld["kWh"].sum())
-        _th_bld_th_total = float(_th_bld_thermal["kWh"].sum())
+        _th_bld_th_total = float(_th_bld_thermal["thermal_kWh"].sum())
 
         tsel1, tsel2, tsel3 = st.columns(3)
         tsel1.metric("Total Energy (Selected)", fmt_kwh(_th_bld_total))
@@ -1422,10 +1492,10 @@ elif active_tab == "Thermal":
         if not _th_bld_thermal.empty:
             fig_th_bld = go.Figure(go.Bar(
                 y=_th_bld_thermal["building"],
-                x=_th_bld_thermal["kWh"] / 1000,
+                x=_th_bld_thermal["thermal_kWh"] / 1000,
                 orientation="h",
                 marker_color="#ef4444",
-                text=[f"{v/1000:.1f} MWh" for v in _th_bld_thermal["kWh"]],
+                text=[f"{v/1000:.1f} MWh" for v in _th_bld_thermal["thermal_kWh"]],
                 textposition="outside",
                 textfont=dict(size=14, color="#111827", family="Inter", weight=700),
                 hovertemplate="<b>%{y}</b><br>%{x:.1f} MWh<extra></extra>",
@@ -1438,10 +1508,11 @@ elif active_tab == "Thermal":
         else:
             st.info("No thermal sensor data available for the selected period.")
 
-        # Weekly trend for thermal
+        # Weekly trend for thermal — sum thermal_kWh by week across all buildings
         _th_campus_week = (
-            _th_sel[_th_sel["building"].isin(_thermal_buildings)]
-            .groupby("week")["kWh"].sum().reset_index().sort_values("week")
+            _th_sel.groupby("week")["thermal_kWh"].sum()
+            .reset_index().rename(columns={"thermal_kWh": "kWh"})
+            .sort_values("week")
         )
         if not _th_campus_week.empty:
             st.markdown('<div class="sec-label">Thermal Trend — Selected Periods</div>', unsafe_allow_html=True)
@@ -1686,30 +1757,85 @@ elif active_tab == "DataIntegrity":
         f'<div style="margin:4px 0 0;"><span style="font-size:0.9rem;font-weight:500;color:#78350f;font-family:Inter,sans-serif;">{_partial_note}</span></div>'
         f'</div>', unsafe_allow_html=True)
 
-    # Utility coverage
+    # Utility coverage — DYNAMIC status computed from actual weekly_energy.csv data
     st.markdown('<div class="sec-label">Utility Coverage</div>', unsafe_allow_html=True)
-    u1, u2, u3 = st.columns(3)
+
+    # Compute per-utility coverage live from df_all
+    _dyn = df_all.copy()
+    _dyn["electric_kWh"] = (_dyn["kWh"] - _dyn["thermal_kWh"]).clip(lower=0)
+
+    _elec_by_bld = _dyn.groupby("building")["electric_kWh"].sum()
+    _elec_active = sorted([b for b, v in _elec_by_bld.items() if v > 0])
+    _elec_total  = float(_dyn["electric_kWh"].sum())
+
+    _th_by_bld   = _dyn.groupby("building")["thermal_kWh"].sum()
+    _th_active   = sorted([b for b, v in _th_by_bld.items() if v > 0])
+    _th_total    = float(_dyn["thermal_kWh"].sum())
+    _th_share    = (_th_total / (_elec_total + _th_total) * 100) if (_elec_total + _th_total) > 0 else 0.0
+
+    _gas_by_bld  = _dyn.groupby("building")["gas_therm"].sum()
+    _gas_active  = sorted([b for b, v in _gas_by_bld.items() if v > 0])
+    _gas_total   = float(_dyn["gas_therm"].sum())
+
+    _wat_by_bld  = _dyn.groupby("building")["water_gallon"].sum()
+    _wat_active  = sorted([b for b, v in _wat_by_bld.items() if v > 0])
+    _wat_total   = float(_dyn["water_gallon"].sum())
+
+    # Pull registered-meter counts from SENSOR_REGISTRY for "A of B" framing
+    _reg_elec = [r for r in SENSOR_REGISTRY if r[2] == "Electric"]
+    _reg_th   = [r for r in SENSOR_REGISTRY if r[2] == "Thermal"]
+    _reg_gas  = [r for r in SENSOR_REGISTRY if r[2] == "Gas"]
+    _reg_wat  = [r for r in SENSOR_REGISTRY if r[2] == "Water"]
+
+    def _status_badge(n_active, label_active="Active", label_none="No data"):
+        if n_active > 0:
+            return f'<span style="color:#16a34a;font-weight:700">● {label_active}</span>'
+        return f'<span style="color:#dc2626;font-weight:700">● {label_none}</span>'
+
+    def _active_list(names):
+        if not names:
+            return '<span style="color:#6b7280;font-style:italic">none reporting</span>'
+        return ", ".join(names) if len(names) <= 6 else f"{', '.join(names[:6])}, +{len(names)-6} more"
+
+    u1, u2, u3, u4 = st.columns(4)
     u1.markdown(
-        '<div class="card"><div class="card-title">⚡ Electricity</div>'
-        '<div style="font-size:0.95rem;color:#374151;line-height:1.8;margin-top:6px;">'
-        '<b>Status:</b> Active for 8 buildings<br>'
-        '<b>Source:</b> FTP interval meters (kWh)<br>'
-        f'<b>Rate:</b> ${ENERGY_RATE:.2f}/kWh (estimated, adjustable in sidebar)'
-        '</div></div>', unsafe_allow_html=True)
+        f'<div class="card"><div class="card-title">⚡ Electricity</div>'
+        f'<div style="font-size:0.92rem;color:#374151;line-height:1.7;margin-top:6px;">'
+        f'<b>Status:</b> {_status_badge(len(_elec_active))}<br>'
+        f'<b>Reporting:</b> {len(_elec_active)} of {len({r[0] for r in _reg_elec})} buildings<br>'
+        f'<b>Total:</b> {_elec_total/1000:,.1f} MWh<br>'
+        f'<b>Buildings:</b> <span style="font-size:0.85rem">{_active_list(_elec_active)}</span><br>'
+        f'<b>Source:</b> kWh interval meters<br>'
+        f'<b>Rate:</b> ${ENERGY_RATE:.2f}/kWh'
+        f'</div></div>', unsafe_allow_html=True)
     u2.markdown(
-        '<div class="card"><div class="card-title">🔥 Gas</div>'
-        '<div style="font-size:0.95rem;color:#374151;line-height:1.8;margin-top:6px;">'
-        '<b>Status:</b> No data available<br>'
-        '<b>Meters:</b> Boiler Plant, Green Music Center, Schulz Info Center<br>'
-        '<b>Note:</b> Meters registered but no readings received'
-        '</div></div>', unsafe_allow_html=True)
+        f'<div class="card"><div class="card-title">🌡️ Thermal</div>'
+        f'<div style="font-size:0.92rem;color:#374151;line-height:1.7;margin-top:6px;">'
+        f'<b>Status:</b> {_status_badge(len(_th_active))}<br>'
+        f'<b>Reporting:</b> {len(_th_active)} of {len({r[0] for r in _reg_th})} buildings<br>'
+        f'<b>Total:</b> {_th_total/1000:,.1f} MWh ({_th_share:.1f}% of campus)<br>'
+        f'<b>Buildings:</b> <span style="font-size:0.85rem">{_active_list(_th_active)}</span><br>'
+        f'<b>Source:</b> BTU/kBTU heating &amp; cooling loops<br>'
+        f'<b>Conversion:</b> BTU × 0.000293071'
+        f'</div></div>', unsafe_allow_html=True)
     u3.markdown(
-        '<div class="card"><div class="card-title">💧 Water</div>'
-        '<div style="font-size:0.95rem;color:#374151;line-height:1.8;margin-top:6px;">'
-        '<b>Status:</b> No data available<br>'
-        '<b>Meter:</b> Green Music Center<br>'
-        '<b>Note:</b> Meter registered but no readings received'
-        '</div></div>', unsafe_allow_html=True)
+        f'<div class="card"><div class="card-title">🔥 Gas</div>'
+        f'<div style="font-size:0.92rem;color:#374151;line-height:1.7;margin-top:6px;">'
+        f'<b>Status:</b> {_status_badge(len(_gas_active))}<br>'
+        f'<b>Reporting:</b> {len(_gas_active)} of {len({r[0] for r in _reg_gas})} buildings<br>'
+        f'<b>Total:</b> {_gas_total:,.0f} therms<br>'
+        f'<b>Meters:</b> <span style="font-size:0.85rem">{_active_list([r[0] for r in _reg_gas]) if _reg_gas else "none"}</span><br>'
+        f'<b>Note:</b> {"Meters registered; no readings received" if len(_gas_active)==0 else "Readings received"}'
+        f'</div></div>', unsafe_allow_html=True)
+    u4.markdown(
+        f'<div class="card"><div class="card-title">💧 Water</div>'
+        f'<div style="font-size:0.92rem;color:#374151;line-height:1.7;margin-top:6px;">'
+        f'<b>Status:</b> {_status_badge(len(_wat_active))}<br>'
+        f'<b>Reporting:</b> {len(_wat_active)} of {len({r[0] for r in _reg_wat})} buildings<br>'
+        f'<b>Total:</b> {_wat_total:,.0f} gallons<br>'
+        f'<b>Meters:</b> <span style="font-size:0.85rem">{_active_list([r[0] for r in _reg_wat]) if _reg_wat else "none"}</span><br>'
+        f'<b>Note:</b> {"Meters registered; no readings received" if len(_wat_active)==0 else "Readings received"}'
+        f'</div></div>', unsafe_allow_html=True)
 
     # Full sensor registry
     st.markdown('<div class="sec-label">Full Sensor Registry — All 37 Sensors</div>',
