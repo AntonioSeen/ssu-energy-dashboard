@@ -220,6 +220,8 @@ def generate_weekly_csv(output_path=WEEKLY_CSV_PATH) -> bool:
       week            — Monday of ISO week (YYYY-MM-DD)
       building        — resolved building name
       kWh             — electricity + thermal (BTU/kBTU/MBTU/tonref) → kWh
+      thermal_kWh     — subset of kWh that came from thermal sensors
+                        (BTU/kBTU/MBTU/tonref). Electric portion = kWh - thermal_kWh.
       gas_therm       — natural gas, raw therms (NOT converted)
       water_gallon    — water, raw gallons
       heating_dd      — 0.0 (placeholder; degree_days table optional)
@@ -247,8 +249,18 @@ def generate_weekly_csv(output_path=WEEKLY_CSV_PATH) -> bool:
             return POINT_ID_MAP[pid][0] if pid in POINT_ID_MAP else str(loc)
 
         kwh_agg, gas_agg, water_agg = defaultdict(float), defaultdict(float), defaultdict(float)
+        # Thermal split: any energy-table row whose unit is NOT kWh is a thermal
+        # loop (BTU/kBTU/MBTU/tonref → heating hot water or chilled water).
+        # Sum these into a separate bucket so the dashboard can show the true
+        # thermal vs electric breakdown without re-reading raw CSVs.
+        thermal_kwh_agg = defaultdict(float)
+
         for week, loc, unit, total in energy_rows:
-            kwh_agg[(week, building_of(loc))] += float(total) * UNIT_TO_KWH.get(unit, 0.0 if unit not in ENERGY_UNITS else 1.0)
+            kwh_contribution = float(total) * UNIT_TO_KWH.get(unit, 0.0 if unit not in ENERGY_UNITS else 1.0)
+            bld = building_of(loc)
+            kwh_agg[(week, bld)] += kwh_contribution
+            if unit in ENERGY_UNITS and unit != "kWh":
+                thermal_kwh_agg[(week, bld)] += kwh_contribution
         for week, loc, _, total in gas_rows:
             gas_agg[(week, building_of(loc))] += float(total)
         for week, loc, _, total in water_rows:
@@ -261,6 +273,7 @@ def generate_weekly_csv(output_path=WEEKLY_CSV_PATH) -> bool:
             rows.append({
                 "week": week, "building": bld,
                 "kWh":           round(kwh, 6),
+                "thermal_kWh":   round(thermal_kwh_agg.get((week, bld), 0.0), 6),
                 "gas_therm":     round(gas_agg.get((week, bld), 0.0), 6),
                 "water_gallon":  round(water_agg.get((week, bld), 0.0), 6),
                 "heating_dd":    0.0,
