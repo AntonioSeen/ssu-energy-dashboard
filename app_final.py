@@ -130,6 +130,17 @@ section[data-testid="stSidebar"] .stMultiSelect > label,
 section[data-testid="stSidebar"] .stSelectbox > label { color: #a3bcd0 !important; font-size: 0.82rem !important; font-weight: 700 !important; text-transform: uppercase !important; letter-spacing: 0.1em !important; }
 section[data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.12) !important; }
 
+/* Main-area horizontal radios (e.g. "Last 12 months / All time" toggles).
+   Without this, Streamlit's default theme leaves the option labels invisible
+   on the light page background. Scoped to NOT override sidebar rules. */
+.main .stRadio div[role="radiogroup"] label,
+.main .stRadio div[role="radiogroup"] label p,
+section.main .stRadio div[role="radiogroup"] label,
+[data-testid="stAppViewContainer"] .main .stRadio div[role="radiogroup"] label {
+    color: #111827 !important;
+    font-weight: 600 !important;
+}
+
 [data-testid="collapsedControl"] { background-color: #1b3a5c !important; border-right: 2px solid #2a5180 !important; }
 [data-testid="collapsedControl"] button [data-testid="stIconMaterial"],
 button[data-testid="baseButton-headerNoPadding"] [data-testid="stIconMaterial"] {
@@ -146,7 +157,7 @@ h2, h3 { font-family: 'Inter', sans-serif !important; font-weight: 700 !importan
 [data-testid="stMetricDelta"] { font-size: 0.92rem !important; font-weight: 600 !important; }
 [data-testid="stMetricDelta"] svg { display: none !important; }
 
-.sec-label { font-family: 'Inter', sans-serif; font-size: 1.05rem; font-weight: 700; color: #111827; text-transform: none; letter-spacing: 0; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; margin: 28px 0 16px 0; }
+.sec-label { font-family: 'Inter', sans-serif; font-size: 1.5rem; font-weight: 800; color: #111827; text-transform: none; letter-spacing: -0.01em; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; margin: 28px 0 16px 0; }
 
 .rw-box { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 18px; text-align: right; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 .rw-label { font-size: 0.72rem; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.1em; display: block; margin-bottom: 4px; }
@@ -213,14 +224,19 @@ div[data-testid="column"] { padding: 0 6px !important; }
 # ══════════════════════════════════════════════════════════════════════════════
 UNIT_TO_KWH = {
     "kWh":    1.0,
+    "Wh":     0.001,        # watt-hours → kilowatt-hours
     "BTU":    0.000293071,
     "MBTU":   293.071,
     "kBTU":   0.293071,   # _MBTU label in BMS files is actually kBTU
     "tonref": 3.51685,
     "therm":  29.3071,
 }
-VALID_UNITS  = {"kWh", "therm", "BTU", "tonref", "MBTU", "kBTU", "gallon"}
-ENERGY_UNITS = {"kWh", "BTU", "MBTU", "kBTU", "tonref"}
+VALID_UNITS  = {"kWh", "Wh", "therm", "BTU", "tonref", "MBTU", "kBTU", "gallon"}
+ENERGY_UNITS = {"kWh", "Wh", "BTU", "MBTU", "kBTU", "tonref"}
+# Energy units that come from THERMAL sensors. kWh and Wh are electric; the
+# rest are heating/cooling loops. Used to split kWh totals into thermal vs
+# electric on the Thermal tab.
+THERMAL_UNITS = {"BTU", "MBTU", "kBTU", "tonref"}
 
 # point-id → (building_name, canonical_unit)
 POINT_ID_MAP = {
@@ -365,9 +381,9 @@ def _process_one_csv(filepath: str) -> dict:
                 kwh = val_n * UNIT_TO_KWH[final_unit]
                 acc[date_str][building]["kWh"] += kwh
                 # Thermal accounting matches master_pipeline.generate_weekly_csv:
-                # any energy unit other than kWh is a thermal loop (BTU/kBTU/
-                # MBTU = heating/cooling, tonref = chiller output).
-                if final_unit != "kWh":
+                # uses THERMAL_UNITS (BTU/kBTU/MBTU/tonref) so kWh AND Wh both
+                # correctly stay classified as electric.
+                if final_unit in THERMAL_UNITS:
                     acc[date_str][building]["thermal_kWh"] += kwh
             elif final_unit == "therm":
                 acc[date_str][building]["therm"] += val_n
@@ -636,6 +652,59 @@ def fmt_cost(v):
     return f"${abs(v):,.0f}"
 
 
+def fmt_power(kwh: float, days: float) -> str:
+    """
+    Average power = kWh / (days × 24 h). Returns kW or MW string.
+    Returns "—" when days is non-positive (avoids divide-by-zero).
+    """
+    if days is None or days <= 0:
+        return "—"
+    kw = kwh / (days * 24.0)
+    if kw >= 1000:
+        return f"{kw/1000:.2f} MW"
+    return f"{kw:,.1f} kW"
+
+
+def fmt_co2(kwh: float, factor: float) -> str:
+    """CO₂ in kg + metric tons. Always shows both for consistency."""
+    kg = kwh * factor
+    tons = kg / 1000.0
+    return f"{kg:,.0f} kg ({tons:,.0f} t)"
+
+
+def days_in_period(weeks: list, time_filter: str) -> float:
+    """
+    Total exposure-days for a list of period keys.
+      - Weekly  → 7 days each
+      - Monthly → exact day count of the month string 'YYYY-MM'
+      - Yearly  → 366 if leap, else 365
+    Falls back to 7×N if a period key can't be parsed.
+    """
+    n = len(weeks) if weeks else 0
+    if n == 0:
+        return 0.0
+    if time_filter == "Weekly":
+        return n * 7.0
+    if time_filter == "Monthly":
+        total = 0.0
+        for w in weeks:
+            try:
+                total += pd.Period(str(w), freq="M").days_in_month
+            except Exception:
+                total += 30.0
+        return total
+    if time_filter == "Yearly":
+        total = 0.0
+        for w in weeks:
+            try:
+                yr = int(str(w))
+                total += 366.0 if (yr % 4 == 0 and (yr % 100 != 0 or yr % 400 == 0)) else 365.0
+            except Exception:
+                total += 365.0
+        return total
+    return n * 7.0
+
+
 def badge_html(status):
     cls = {"OK": "badge-ok", "Missing": "badge-open", "Review": "badge-review",
            "PGE": "badge-skip", "Raw CSV": "badge-raw"}.get(status, "badge-skip")
@@ -713,20 +782,20 @@ with st.sidebar:
     # Multiselect pills stay red; selectbox value reads directly on dark background.
     st.markdown("""
 <style>
-/* SELECTBOX outer — dark container with subtle blue border (matches multiselect) */
+/* SELECTBOX — fill the whole inner control red, white text, no nested pill.
+   Simple & reliable: avoids fighting BaseWeb's flex layout so text never
+   disappears and the colored "box" the user requested is always visible. */
 section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
-    background-color: transparent !important;
-    border: 1px solid #2a5180 !important;
+    background-color: #dc2626 !important;
+    border: 1px solid #dc2626 !important;
     border-radius: 6px !important;
 }
-/* SELECTBOX value text — white, no pill background */
-section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div > div,
-section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div > div *,
+section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] *,
 section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] input {
-    background-color: transparent !important;
     color: #ffffff !important;
+    background-color: transparent !important;
 }
-/* SELECTBOX chevron — white */
+/* Chevron arrow — white on the red */
 section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] svg {
     color: #ffffff !important;
     fill: #ffffff !important;
@@ -791,7 +860,9 @@ section[data-testid="stSidebar"] .sidebar-title {
     elif time_filter == "Monthly":
         df_all["_period"] = df_all["_wstart"].dt.to_period("M").astype(str)
         monthly = (df_all.groupby(["_period", "building"])
-                   .agg(kWh=("kWh", "sum"), gas_therm=("gas_therm", "sum"),
+                   .agg(kWh=("kWh", "sum"),
+                        thermal_kWh=("thermal_kWh", "sum"),
+                        gas_therm=("gas_therm", "sum"),
                         water_gallon=("water_gallon", "sum"))
                    .reset_index().rename(columns={"_period": "week"}))
         all_periods = sorted(monthly["week"].unique())
@@ -808,7 +879,9 @@ section[data-testid="stSidebar"] .sidebar-title {
     else:  # Yearly
         df_all["_period"] = df_all["_wstart"].dt.year.astype(str)
         yearly = (df_all.groupby(["_period", "building"])
-                  .agg(kWh=("kWh", "sum"), gas_therm=("gas_therm", "sum"),
+                  .agg(kWh=("kWh", "sum"),
+                       thermal_kWh=("thermal_kWh", "sum"),
+                       gas_therm=("gas_therm", "sum"),
                        water_gallon=("water_gallon", "sum"))
                   .reset_index().rename(columns={"_period": "week"}))
         all_periods = sorted(yearly["week"].unique())
@@ -842,6 +915,24 @@ section[data-testid="stSidebar"] .sidebar-title {
         f'<div style="font-size:0.8rem;color:#a3bcd0;margin-top:4px;margin-bottom:2px;">'
         f'All cost estimates use <b style="color:#ffffff">${ENERGY_RATE:.2f}/kWh</b></div>',
         unsafe_allow_html=True)
+
+    # CO₂ emission factor (kg per kWh) — drives all CO₂ readouts on the page.
+    st.markdown(
+        '<p style="color:#a3bcd0;font-size:0.82rem;font-weight:700;text-transform:uppercase;'
+        'letter-spacing:0.1em;margin-top:14px;margin-bottom:2px;">CO₂ Emission Factor</p>',
+        unsafe_allow_html=True)
+    EMISSION_FACTOR = st.number_input(
+        "CO₂ Emission Factor (kg CO₂ / kWh)",
+        min_value=0.0, max_value=1.0, value=0.20, step=0.01,
+        format="%.2f", label_visibility="collapsed", key="co2_emission_factor")
+    st.markdown(
+        f'<div style="font-size:0.78rem;color:#a3bcd0;margin-top:4px;line-height:1.45;">'
+        f'kg CO₂ produced per kWh of energy. '
+        f'<b style="color:#ffffff">{EMISSION_FACTOR:.2f}</b> means '
+        f'{EMISSION_FACTOR:.2f} kg CO₂ per 1 kWh used.<br>'
+        f'<span style="color:#7ab4d4">Formula: CO₂ = Energy (kWh) × Emission Factor</span>'
+        f'</div>',
+        unsafe_allow_html=True)
     st.markdown("---")
 
     # ── BUILDING DETAIL ──────────────────────────────────────────────────────
@@ -851,18 +942,39 @@ section[data-testid="stSidebar"] .sidebar-title {
     # data, sorted by total kWh (highest first). This drives the Overview and
     # Thermal pages.
     _sidebar_bld_options = []
+    _sidebar_thermal_blds = set()  # buildings with non-zero thermal across all data
     if all_weeks:
         _temp_by_bld = df_all.groupby(["week", "building"])["kWh"].sum().reset_index()
         _all_bld_kwh = _temp_by_bld.groupby("building")["kWh"].sum().sort_values(ascending=False).reset_index()
         _sidebar_bld_options = _all_bld_kwh["building"].tolist()
+        # Identify which buildings have thermal data for the (none) annotation.
+        # Uses df_all so the answer is stable across time-range changes.
+        _th_by_bld_total = df_all.groupby("building")["thermal_kWh"].sum()
+        _sidebar_thermal_blds = set(_th_by_bld_total[_th_by_bld_total > 0].index.tolist())
+
+    def _bld_dropdown_label(b: str) -> str:
+        # Underlying value passed downstream stays as the bare building name.
+        # Only the visible label gets the suffix.
+        if b in _sidebar_thermal_blds:
+            return b
+        return f"{b}  ·  (no thermal data)"
 
     if _sidebar_bld_options:
         _sidebar_sel_bld = st.selectbox(
             "sidebar_bld_detail",
             _sidebar_bld_options,
             index=0,
+            format_func=_bld_dropdown_label,
             label_visibility="collapsed"
         )
+        # Tiny legend so the annotation is self-explanatory
+        st.markdown(
+            '<div style="font-size:0.75rem;color:#a3bcd0;margin-top:6px;line-height:1.4;">'
+            'Buildings marked <b style="color:#ffffff">"(no thermal data)"</b> '
+            'have electric meters only — selecting them in the Thermal tab will '
+            'show no thermal breakdown.'
+            '</div>',
+            unsafe_allow_html=True)
     else:
         _sidebar_sel_bld = None
 
@@ -870,7 +982,7 @@ section[data-testid="stSidebar"] .sidebar-title {
 
     st.markdown("**Section**")
     if role == "Student (Gamified)":
-        nav_opts = ["📊 Overview", "🏆 Leaderboard", "🔥 Thermal", "🔍 Data Integrity"]
+        nav_opts = ["📊 Overview", "🔥 Thermal", "🏆 Leaderboard", "🔍 Data Integrity"]
     else:
         nav_opts = ["📊 Overview", "🔥 Thermal", "🔍 Data Integrity"]
     _tab = st.radio("nav", nav_opts, label_visibility="collapsed")
@@ -953,27 +1065,60 @@ if active_tab == "Overview":
         _at_section_label = "Campus Energy — All Time"
     st.markdown(f'<div class="sec-label">{_at_section_label}</div>', unsafe_allow_html=True)
 
-    at1, at2, at3 = st.columns(3)
+    # Total elapsed days for Avg Power on the all-time view: from earliest week
+    # start to (latest week start + 7 days). Uses real data dates so it stays
+    # accurate as new weeks are added by the pipeline.
+    if not _at.empty:
+        _at_days_span = float((_at["_wstart"].max() - _at["_wstart"].min()).days + 7)
+    else:
+        _at_days_span = 0.0
+
+    at1, at2, at3, at4 = st.columns(4)
     at1.metric("Total Energy Consumed", fmt_kwh(_at_total_kwh))
     at2.metric("Total Energy Cost", fmt_cost(_at_total_cost))
-    at3.metric("Cost Per kWh", f"${ENERGY_RATE:.2f}")
+    at3.metric("Avg Power", fmt_power(_at_total_kwh, _at_days_span))
+    at4.metric("CO₂ Emitted (Est.)", fmt_co2(_at_total_kwh, EMISSION_FACTOR))
+    st.markdown(
+        '<p style="font-size:0.85rem;color:#6b7280;margin-top:-4px;line-height:1.4;">'
+        '<b>Avg Power:</b> energy per hour over the period (kWh ÷ total hours). '
+        f'<b>CO₂:</b> kWh × {EMISSION_FACTOR:.2f} kg/kWh — adjustable in the sidebar.'
+        '</p>',
+        unsafe_allow_html=True)
 
-    # Vertical bar chart — scales well across years
-    y_at_max = _at_monthly["_mwh"].max() * 1.35 if not _at_monthly.empty else 1
-    _n_months = len(_at_monthly)
-    _bar_chart_height = max(380, min(520, 320 + _n_months * 4))
+    # Vertical bar chart — scales well across years.
+    # Range toggle: default to last 12 months for legibility, allow "show all"
+    # for the deep-dive view. Toggle is hidden when there's nothing to toggle.
+    if len(_at_monthly) > 12:
+        _range_choice = st.radio(
+            "campus_energy_range",
+            ["Last 12 months", "All time"],
+            horizontal=True, index=0,
+            key="campus_energy_range",
+            label_visibility="collapsed")
+        _at_monthly_view = _at_monthly.tail(12).copy() if _range_choice == "Last 12 months" else _at_monthly
+    else:
+        _at_monthly_view = _at_monthly
+
+    y_at_max = _at_monthly_view["_mwh"].max() * 1.35 if not _at_monthly_view.empty else 1
+    _n_months = len(_at_monthly_view)
+    # Layout scaling: more months → taller chart (max 560px), rotated ticks
+    # earlier (>10), and bar value labels hidden once crowded (>12) to avoid
+    # the value-label overlap that makes the chart look noisy. Hover still
+    # shows the exact value per bar.
+    _bar_chart_height = max(380, min(560, 340 + _n_months * 6))
+    _show_bar_text    = _n_months <= 12
+    _tick_angle       = -45 if _n_months > 10 else 0
+    _tick_size        = 14 if _n_months <= 10 else (12 if _n_months <= 18 else 10)
     fig_at = go.Figure(go.Bar(
-        x=_at_monthly["_label"],
-        y=_at_monthly["_mwh"],
+        x=_at_monthly_view["_label"],
+        y=_at_monthly_view["_mwh"],
         marker_color=C_NAVY,
-        text=[f"{v:.1f}" for v in _at_monthly["_mwh"]],
-        textposition="outside",
-        textfont=dict(size=max(9, min(16, int(340 / max(_n_months, 1)))), color="#374151", family="Inter", weight=700),
+        text=[f"{v:.1f}" for v in _at_monthly_view["_mwh"]] if _show_bar_text else None,
+        textposition="outside" if _show_bar_text else "none",
+        textfont=dict(size=14, color="#374151", family="Inter", weight=700),
         hovertemplate="<b>%{x}</b><br>%{y:.1f} MWh  ·  $%{customdata:,.0f}<extra></extra>",
-        customdata=_at_monthly["kWh"] * ENERGY_RATE,
+        customdata=_at_monthly_view["kWh"] * ENERGY_RATE,
     ))
-    _tick_angle = -45 if _n_months > 18 else 0
-    _tick_size  = max(9, min(16, int(340 / max(_n_months, 1))))
     fig_at.update_layout(
         **plot_base(height=_bar_chart_height),
         bargap=0.25, yaxis_title="MWh", xaxis_title="",
@@ -999,20 +1144,25 @@ if active_tab == "Overview":
 
         # Campus KPIs
         st.markdown('<div class="sec-label">Consumption During Selected Periods — All Buildings</div>', unsafe_allow_html=True)
-        k1, k2 = st.columns(2)
+        _sel_days = days_in_period(sorted_sel, time_filter)
+        k1, k2, k3, k4 = st.columns(4)
         k1_label = (f"Energy During — {period_label(sorted_sel[0])}"
                     if len(sorted_sel) == 1
                     else f"Energy During — {len(sorted_sel)} Periods Combined")
         k1.metric(k1_label, fmt_kwh(campus_total_sel))
         k2.metric(f"Estimated Energy Cost (@ ${ENERGY_RATE}/kWh)", fmt_cost(campus_total_cost))
+        k3.metric("Avg Power", fmt_power(campus_total_sel, _sel_days))
+        k4.metric("CO₂ Emitted (Est.)", fmt_co2(campus_total_sel, EMISSION_FACTOR))
 
         # All Buildings chart
         max_periods = 4
         chart_weeks = sorted_sel[-max_periods:]
         n_periods   = len(chart_weeks)
-        chart_title = (f"All Buildings — {period_label(chart_weeks[0])}"
-                       if n_periods == 1
-                       else f"All Buildings — {period_label(chart_weeks[0])} to {period_label(chart_weeks[-1])}")
+        # Single week → show that week's date range; multiple → just "All Buildings"
+        if n_periods == 1:
+            chart_title = f"All Buildings — {period_label(chart_weeks[0])}"
+        else:
+            chart_title = "All Buildings"
         st.markdown(f'<div class="sec-label">{chart_title}</div>', unsafe_allow_html=True)
 
         if n_periods == 1:
@@ -1068,28 +1218,36 @@ if active_tab == "Overview":
             fig_all.update_xaxes(tickfont=dict(size=17, color="#111827", family="Inter", weight=700))
             st.plotly_chart(fig_all, use_container_width=True)
 
-        # Building detail — driven by the sidebar "Building Detail" selector
-        sel_bld = _sidebar_sel_bld
-        st.markdown(
-            f'<div class="sec-label">Building Detail — {sel_bld if sel_bld else "No building selected"}</div>',
-            unsafe_allow_html=True)
-        st.markdown(
-            '<p style="font-size:0.88rem;color:#6b7280;margin-top:-6px;margin-bottom:10px;">'
-            'Use the <b>Building Detail</b> dropdown in the sidebar to switch buildings.</p>',
-            unsafe_allow_html=True)
+        # Building detail — has BOTH an in-page selector and a sidebar selector.
+        # Both control the same view; the in-page one defaults to whatever the
+        # sidebar shows, and changing either updates the page.
+        st.markdown('<div class="sec-label">Building Detail — Select a Building to View Details</div>', unsafe_allow_html=True)
 
-        if not sel_bld:
-            st.info("No buildings available — no data in the current dataset.")
-            st.stop()
-
-        # Keep these lookups for use by metric cards / trends below
+        # Build dropdown from ALL buildings present in ANY selected period,
+        # sorted by total kWh across all selected periods (highest first).
         bld_kwh_all_sel = (by_bld[by_bld["week"].isin(sorted_sel)]
                            .groupby("building")["kWh"].sum()
                            .sort_values(ascending=False)
                            .reset_index())
         bld_order = bld_kwh_all_sel["building"].tolist()
+        # Metric cards still reflect the latest selected week (0 if no data that week)
         bld_kwh_lkp = (by_bld[by_bld["week"] == latest_week]
                        .set_index("building")["kWh"].to_dict())
+
+        if not bld_order:
+            st.info("No buildings available — no data in the selected period.")
+            st.stop()
+
+        # Default the in-page picker to the sidebar's choice when possible
+        _default_idx = 0
+        if _sidebar_sel_bld and _sidebar_sel_bld in bld_order:
+            _default_idx = bld_order.index(_sidebar_sel_bld)
+
+        sel_bld = st.selectbox(
+            "Select a building (sorted highest to lowest kWh)",
+            bld_order, index=_default_idx,
+            format_func=lambda b: b,
+            label_visibility="collapsed")
 
         if BUILDINGS_STATUS.get(sel_bld, "ok") == "review":
             st.markdown(
@@ -1106,7 +1264,7 @@ if active_tab == "Overview":
         # Does NOT affect the dropdown, trend chart title, or alert banners.
         _bld_short = "Wine Spectator LC" if sel_bld == "Wine Spectator Learning Ctr" else sel_bld
 
-        bm1, bm2 = st.columns(2)
+        bm1, bm2, bm3, bm4 = st.columns(4)
         bm1_label = (f"{_bld_short} — {period_label(sorted_sel[0])}"
                      if len(sorted_sel) == 1
                      else f"{_bld_short} — {len(sorted_sel)} Selected Periods")
@@ -1115,9 +1273,11 @@ if active_tab == "Overview":
                      else f"Combined Cost of {len(sorted_sel)} Periods (@ ${ENERGY_RATE}/kWh)")
         bm1.metric(bm1_label, fmt_kwh(b_cur))
         bm2.metric(bm2_label, fmt_cost(b_cost))
+        bm3.metric("Avg Power", fmt_power(b_cur, days_in_period(sorted_sel, time_filter)))
+        bm4.metric("CO₂ Emitted (Est.)", fmt_co2(b_cur, EMISSION_FACTOR))
 
         st.markdown(
-            f'<div style="font-size:1.05rem;font-weight:700;color:#111827;font-family:Inter,sans-serif;'
+            f'<div style="font-size:1.25rem;font-weight:800;color:#111827;font-family:Inter,sans-serif;'
             f'margin-top:6px;margin-bottom:2px;">{sel_bld} — {time_filter} Trend</div>',
             unsafe_allow_html=True)
 
@@ -1147,7 +1307,11 @@ if active_tab == "Overview":
             st.plotly_chart(fig_trend, use_container_width=True)
 
         # Total campus energy — selected periods
-        st.markdown('<div class="sec-label">Total Campus Energy — All Selected Periods</div>',
+        if len(sorted_sel) == 1:
+            _campus_title = f"Total Campus Energy — {period_label(sorted_sel[0])}"
+        else:
+            _campus_title = "Total Campus Energy — All Selected Periods"
+        st.markdown(f'<div class="sec-label">{_campus_title}</div>',
                     unsafe_allow_html=True)
         campus_by_week = (by_bld[by_bld["week"].isin(sorted_sel)]
                           .groupby("week")["kWh"].sum()
@@ -1422,103 +1586,246 @@ elif active_tab == "Thermal":
 
     # Stacked bar chart — thermal vs non-thermal by month
     st.markdown('<div class="sec-label">Monthly Energy Split — Thermal vs Electric</div>', unsafe_allow_html=True)
-    _n_th_months = len(_th_merged)
-    _th_tick_angle = -45 if _n_th_months > 18 else 0
-    _th_tick_size  = max(9, min(15, int(340 / max(_n_th_months, 1))))
+    # Range toggle to keep the chart legible with many months of history.
+    if len(_th_merged) > 12:
+        _th_range_choice = st.radio(
+            "thermal_split_range",
+            ["Last 12 months", "All time"],
+            horizontal=True, index=0,
+            key="thermal_split_range",
+            label_visibility="collapsed")
+        _th_merged_view = _th_merged.tail(12).copy() if _th_range_choice == "Last 12 months" else _th_merged
+    else:
+        _th_merged_view = _th_merged
+
+    _n_th_months = len(_th_merged_view)
+    # Same crowding-aware scaling as Overview's all-time chart.
+    _th_chart_height = max(380, min(560, 340 + _n_th_months * 6))
+    _th_tick_angle   = -45 if _n_th_months > 10 else 0
+    _th_tick_size    = 14 if _n_th_months <= 10 else (12 if _n_th_months <= 18 else 10)
     fig_th_stack = go.Figure()
     fig_th_stack.add_trace(go.Bar(
         name="Electric (kWh meters)",
-        x=_th_merged["_label"],
-        y=_th_merged["electric_kWh"] / 1000,
+        x=_th_merged_view["_label"],
+        y=_th_merged_view["electric_kWh"] / 1000,
         marker_color=C_NAVY,
         hovertemplate="<b>%{x}</b><br>Electric: %{y:.1f} MWh<extra></extra>",
     ))
     fig_th_stack.add_trace(go.Bar(
         name="Thermal (BTU/kBTU → kWh)",
-        x=_th_merged["_label"],
-        y=_th_merged["thermal_kWh"] / 1000,
+        x=_th_merged_view["_label"],
+        y=_th_merged_view["thermal_kWh"] / 1000,
         marker_color="#ef4444",
         hovertemplate="<b>%{x}</b><br>Thermal: %{y:.1f} MWh<extra></extra>",
     ))
     fig_th_stack.update_layout(
-        **plot_base(height=max(380, min(520, 320 + _n_th_months * 4))),
+        **plot_base(height=_th_chart_height),
         barmode="stack", bargap=0.25, yaxis_title="MWh",
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1,
-                    font=dict(size=14, family="Inter"), bgcolor="#ffffff",
-                    bordercolor="#e2e8f0", borderwidth=1),
+                    font=dict(size=14, family="Inter", color="#111827"),
+                    bgcolor="#ffffff", bordercolor="#e2e8f0", borderwidth=1),
     )
     fig_th_stack.update_xaxes(tickangle=_th_tick_angle, tickfont=dict(size=_th_tick_size, family="Inter", color=PLOT_TEXT, weight=700))
     fig_th_stack.update_yaxes(tickfont=dict(size=14, family="Inter", color=PLOT_TEXT, weight=700))
     st.plotly_chart(fig_th_stack, use_container_width=True)
 
-    # Thermal % over time line chart
-    st.markdown('<div class="sec-label">Thermal Share (%) Over Time</div>', unsafe_allow_html=True)
-    fig_th_pct = go.Figure(go.Scatter(
-        x=_th_merged["_label"],
-        y=_th_merged["thermal_pct"],
-        mode="lines+markers",
-        line=dict(color="#ef4444", width=2.5),
-        marker=dict(size=7, color="#ef4444"),
-        hovertemplate="<b>%{x}</b><br>Thermal: %{y:.1f}%<extra></extra>",
-        name="Thermal %",
-    ))
-    fig_th_pct.update_layout(
-        **plot_base(height=280),
-        yaxis_title="Thermal %",
-    )
-    fig_th_pct.update_xaxes(tickangle=_th_tick_angle, tickfont=dict(size=_th_tick_size, family="Inter", color=PLOT_TEXT, weight=700))
-    fig_th_pct.update_yaxes(ticksuffix="%", tickfont=dict(size=14, family="Inter", color=PLOT_TEXT, weight=700))
-    st.plotly_chart(fig_th_pct, use_container_width=True)
+    # ── All Buildings — Thermal Energy ───────────────────────────────────────
+    # Mirrors the Overview "All Buildings" chart: horizontal bars per building,
+    # grouped by selected period (max 4 most recent), one color per period.
+    # Uses thermal_kWh instead of total kWh.
+    if selected_weeks:
+        _th_max_periods = 4
+        _th_chart_weeks = sorted_sel[-_th_max_periods:]
+        _th_n_periods   = len(_th_chart_weeks)
+        if _th_n_periods == 1:
+            _th_chart_title = f"All Buildings — Thermal Energy — {period_label(_th_chart_weeks[0])}"
+        else:
+            _th_chart_title = "All Buildings — Thermal Energy"
+        st.markdown(f'<div class="sec-label">{_th_chart_title}</div>', unsafe_allow_html=True)
+
+        # Per-(week, building) thermal kWh — analogous to `by_bld` in Overview
+        _th_by_bld = (df_view[df_view["week"].isin(_th_chart_weeks)]
+                      .groupby(["week", "building"])["thermal_kWh"].sum()
+                      .reset_index())
+
+        if _th_by_bld["thermal_kWh"].sum() == 0:
+            st.info("No thermal sensor data available for the selected period(s).")
+        elif _th_n_periods == 1:
+            _ldf = (_th_by_bld[_th_by_bld["week"] == _th_chart_weeks[0]]
+                    .sort_values("thermal_kWh", ascending=True).copy())
+            # Hide buildings with no thermal data so the chart is readable
+            _ldf = _ldf[_ldf["thermal_kWh"] > 0]
+            _ldf["disp"] = _ldf["thermal_kWh"] / 1000
+            fig_th_all = go.Figure(go.Bar(
+                name=period_label(_th_chart_weeks[0]),
+                y=_ldf["building"], x=_ldf["disp"],
+                orientation="h", marker_color="#ef4444",
+                text=[f"{v:.1f}" for v in _ldf["disp"]],
+                textposition="outside",
+                textfont=dict(size=19, color="#111827", family="Inter", weight=700),
+                hovertemplate="<b>%{y}</b><br>%{x:.1f} MWh Thermal<extra></extra>",
+            ))
+            fig_th_all.update_layout(
+                **plot_base(height=max(340, len(_ldf) * 68)),
+                xaxis_title="MWh", yaxis_title="", showlegend=False)
+            fig_th_all.update_yaxes(tickfont=dict(size=17, color="#111827", family="Inter", weight=700))
+            fig_th_all.update_xaxes(tickfont=dict(size=17, color="#111827", family="Inter", weight=700))
+            st.plotly_chart(fig_th_all, use_container_width=True)
+        else:
+            _th_palette = ["#ef4444", "#3b82f6", "#6366f1", C_SLATE]
+            # Buildings that reported any thermal energy across selected periods
+            _th_all_blds = (_th_by_bld.groupby("building")["thermal_kWh"].sum()
+                            .loc[lambda s: s > 0].index.tolist())
+            _th_latest_kwh = (_th_by_bld[_th_by_bld["week"] == _th_chart_weeks[-1]]
+                              .set_index("building")["thermal_kWh"]
+                              .reindex(_th_all_blds).fillna(0))
+            _th_blds_sorted = _th_latest_kwh.sort_values(ascending=True).index.tolist()
+            fig_th_all = go.Figure()
+            for _idx, _wk in enumerate(_th_chart_weeks):
+                _wk_data = (_th_by_bld[_th_by_bld["week"] == _wk]
+                            .set_index("building")["thermal_kWh"]
+                            .reindex(_th_blds_sorted).fillna(0) / 1000)
+                fig_th_all.add_trace(go.Bar(
+                    name=period_label(_wk),
+                    y=_th_blds_sorted, x=_wk_data.values,
+                    orientation="h",
+                    marker_color=_th_palette[_idx % len(_th_palette)],
+                    text=[f"{v:.1f}" if v > 0 else "" for v in _wk_data.values],
+                    textposition="outside",
+                    textfont=dict(size=19, color="#111827", family="Inter", weight=700),
+                    hovertemplate=f"<b>%{{y}}</b><br>{period_label(_wk)}: %{{x:.1f}} MWh Thermal<extra></extra>",
+                ))
+            fig_th_all.update_layout(
+                **plot_base(height=max(380, len(_th_blds_sorted) * 82)),
+                barmode="group", bargap=0.15, bargroupgap=0.05,
+                xaxis_title="MWh", yaxis_title="", showlegend=True,
+                legend=dict(
+                    orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1,
+                    font=dict(size=16, family="Inter", color=PLOT_TEXT),
+                    bgcolor="#ffffff", bordercolor="#e2e8f0", borderwidth=1),
+            )
+            fig_th_all.update_yaxes(tickfont=dict(size=17, color="#111827", family="Inter", weight=700))
+            fig_th_all.update_xaxes(tickfont=dict(size=17, color="#111827", family="Inter", weight=700))
+            st.plotly_chart(fig_th_all, use_container_width=True)
+    else:
+        st.markdown('<div class="sec-label">All Buildings — Thermal Energy</div>', unsafe_allow_html=True)
+        st.info("👈 Select a time period from the sidebar to see thermal energy by building.")
 
     # If a time period is selected, show building-level thermal breakdown
     if selected_weeks:
-        st.markdown('<div class="sec-label">Thermal Breakdown — Selected Periods</div>', unsafe_allow_html=True)
+        # ── Thermal Building Detail — sidebar + in-page dropdowns, synced ───
+        # Both the sidebar's Building Detail dropdown AND an in-page selector
+        # control the view. Changing EITHER updates the chart immediately.
+        # Sync mechanism: when the sidebar value changes between runs, we push
+        # the new value into the in-page picker's session_state BEFORE the
+        # widget renders. This bypasses Streamlit's caching of the widget's
+        # last-clicked value (which was the bug in the previous version).
+        st.markdown('<div class="sec-label">Thermal Breakdown — Select a Building to View Details</div>', unsafe_allow_html=True)
+
         _th_sel = df_view[df_view["week"].isin(sorted_sel)].copy()
-        # Aggregate per building, keeping BOTH total kWh and true thermal kWh.
-        _th_bld = _th_sel.groupby("building").agg(
-            kWh=("kWh", "sum"),
-            thermal_kWh=("thermal_kWh", "sum"),
-        ).reset_index()
-        # Show only buildings that actually reported thermal energy.
-        _th_bld_thermal = _th_bld[_th_bld["thermal_kWh"] > 0].sort_values("thermal_kWh", ascending=False)
-        _th_bld_total = float(_th_bld["kWh"].sum())
-        _th_bld_th_total = float(_th_bld_thermal["thermal_kWh"].sum())
+        _th_bld_kwh = (_th_sel.groupby("building")["thermal_kWh"].sum()
+                       .sort_values(ascending=False)
+                       .reset_index())
+        _th_bld_kwh = _th_bld_kwh[_th_bld_kwh["thermal_kWh"] > 0]
+        _th_bld_order = _th_bld_kwh["building"].tolist()
 
-        tsel1, tsel2, tsel3 = st.columns(3)
-        tsel1.metric("Total Energy (Selected)", fmt_kwh(_th_bld_total))
-        tsel2.metric("Thermal Energy (Selected)", fmt_kwh(_th_bld_th_total))
-        tsel3.metric("Thermal Share", f"{(_th_bld_th_total/_th_bld_total*100) if _th_bld_total>0 else 0:.1f}%")
-
-        if not _th_bld_thermal.empty:
-            fig_th_bld = go.Figure(go.Bar(
-                y=_th_bld_thermal["building"],
-                x=_th_bld_thermal["thermal_kWh"] / 1000,
-                orientation="h",
-                marker_color="#ef4444",
-                text=[f"{v/1000:.1f} MWh" for v in _th_bld_thermal["thermal_kWh"]],
-                textposition="outside",
-                textfont=dict(size=14, color="#111827", family="Inter", weight=700),
-                hovertemplate="<b>%{y}</b><br>%{x:.1f} MWh<extra></extra>",
-            ))
-            fig_th_bld.update_layout(
-                **plot_base(height=max(280, len(_th_bld_thermal) * 60)),
-                xaxis_title="MWh", yaxis_title="",
-            )
-            st.plotly_chart(fig_th_bld, use_container_width=True)
+        if not _th_bld_order:
+            st.info("No thermal sensor data available for the selected period(s).")
         else:
-            st.info("No thermal sensor data available for the selected period.")
+            # Session-state keys for the picker and the last-seen sidebar value
+            _PICKER_KEY  = "thermal_bld_picker"
+            _LAST_SB_KEY = "_th_last_sidebar_bld"
 
-        # Weekly trend for thermal — sum thermal_kWh by week across all buildings
+            # 1) If the sidebar value changed since last run AND the new value
+            #    is in our thermal options, push it into the picker's state.
+            _prev_sidebar = st.session_state.get(_LAST_SB_KEY)
+            if _prev_sidebar != _sidebar_sel_bld:
+                if _sidebar_sel_bld in _th_bld_order:
+                    st.session_state[_PICKER_KEY] = _sidebar_sel_bld
+                st.session_state[_LAST_SB_KEY] = _sidebar_sel_bld
+
+            # 2) If the picker's cached value is stale (e.g. user changed time
+            #    range and the previously-selected building no longer has any
+            #    thermal data), drop it so Streamlit defaults to the first option.
+            if _PICKER_KEY in st.session_state and st.session_state[_PICKER_KEY] not in _th_bld_order:
+                del st.session_state[_PICKER_KEY]
+
+            # 3) If nothing is set yet, prefer sidebar pick (when valid),
+            #    otherwise default to the largest thermal contributor.
+            if _PICKER_KEY not in st.session_state:
+                st.session_state[_PICKER_KEY] = (
+                    _sidebar_sel_bld if _sidebar_sel_bld in _th_bld_order
+                    else _th_bld_order[0]
+                )
+
+            _th_sel_bld = st.selectbox(
+                "Select a building (sorted highest to lowest thermal kWh)",
+                _th_bld_order,
+                key=_PICKER_KEY,
+                format_func=lambda b: b,
+                label_visibility="collapsed")
+
+            # Per-building totals across selected periods — thermal kWh only
+            _b_th_cur = float(_th_sel[(_th_sel["building"] == _th_sel_bld)]["thermal_kWh"].sum())
+            _b_th_cost = _b_th_cur * ENERGY_RATE
+            _bld_short_th = "Wine Spectator LC" if _th_sel_bld == "Wine Spectator Learning Ctr" else _th_sel_bld
+
+            _tbm1, _tbm2, _tbm3, _tbm4 = st.columns(4)
+            _tbm1_label = (f"{_bld_short_th} — {period_label(sorted_sel[0])} (Thermal)"
+                           if len(sorted_sel) == 1
+                           else f"{_bld_short_th} — {len(sorted_sel)} Selected Periods (Thermal)")
+            _tbm2_label = (f"Estimated Thermal Cost (@ ${ENERGY_RATE}/kWh)"
+                           if len(sorted_sel) == 1
+                           else f"Combined Thermal Cost of {len(sorted_sel)} Periods (@ ${ENERGY_RATE}/kWh)")
+            _tbm1.metric(_tbm1_label, fmt_kwh(_b_th_cur))
+            _tbm2.metric(_tbm2_label, fmt_cost(_b_th_cost))
+            _tbm3.metric("Avg Thermal Power", fmt_power(_b_th_cur, days_in_period(sorted_sel, time_filter)))
+            _tbm4.metric("CO₂ Emitted (Est.)", fmt_co2(_b_th_cur, EMISSION_FACTOR))
+
+            st.markdown(
+                f'<div style="font-size:1.25rem;font-weight:800;color:#111827;font-family:Inter,sans-serif;'
+                f'margin-top:6px;margin-bottom:2px;">{_th_sel_bld} — {time_filter} Thermal Trend</div>',
+                unsafe_allow_html=True)
+
+            _bld_th_trend = (_th_sel[_th_sel["building"] == _th_sel_bld]
+                             .groupby("week")["thermal_kWh"].sum()
+                             .reset_index().sort_values("week"))
+            if len(_bld_th_trend) >= 1:
+                _bld_th_trend["label"] = _bld_th_trend["week"].apply(period_label)
+                _bld_th_trend["disp"]  = (_bld_th_trend["thermal_kWh"] / 1000).clip(lower=0.0)
+                _fig_bld_th = go.Figure(go.Bar(
+                    x=_bld_th_trend["label"], y=_bld_th_trend["disp"],
+                    marker_color="#ef4444",
+                    text=[f"{v:.1f} MWh" if v > 0 else "0" for v in _bld_th_trend["disp"]],
+                    textposition="outside",
+                    textfont=dict(size=16, color=PLOT_TEXT, family="Inter", weight=700),
+                    hovertemplate="<b>%{x}</b><br>%{y:.1f} MWh Thermal<extra></extra>",
+                    showlegend=False,
+                    base=0,
+                ))
+                _yt_th = _bld_th_trend["disp"].max() * 1.3 if (not _bld_th_trend.empty and _bld_th_trend["disp"].max() > 0) else 1
+                _fig_bld_th.update_layout(**plot_base(height=280), bargap=0.45, yaxis_title="MWh (Thermal)")
+                _fig_bld_th.update_yaxes(range=[0, _yt_th], tickfont=dict(size=16, family="Inter", weight=700))
+                _fig_bld_th.update_xaxes(tickfont=dict(size=16, family="Inter", color=PLOT_TEXT, weight=700))
+                st.plotly_chart(_fig_bld_th, use_container_width=True)
+
+        # ── Total Campus Thermals ────────────────────────────────────────────
+        # Same layout as Overview's "Total Campus Energy" block, but for thermal.
+        # Title is dynamic: single-week shows that week's range; multi-week shows
+        # "All Selected Periods".
         _th_campus_week = (
             _th_sel.groupby("week")["thermal_kWh"].sum()
             .reset_index().rename(columns={"thermal_kWh": "kWh"})
             .sort_values("week")
         )
         if not _th_campus_week.empty:
-            st.markdown('<div class="sec-label">Thermal Trend — Selected Periods</div>', unsafe_allow_html=True)
+            if len(sorted_sel) == 1:
+                _th_campus_title = f"Total Campus Thermals — {period_label(sorted_sel[0])}"
+            else:
+                _th_campus_title = "Total Campus Thermals — All Selected Periods"
+            st.markdown(f'<div class="sec-label">{_th_campus_title}</div>', unsafe_allow_html=True)
             _th_campus_week["label"] = _th_campus_week["week"].apply(period_label)
-            _th_campus_week["disp"]  = _th_campus_week["kWh"] / 1000
-            _th_campus_week["disp"]  = _th_campus_week["disp"].clip(lower=0.0)
+            _th_campus_week["disp"]  = (_th_campus_week["kWh"] / 1000).clip(lower=0.0)
             fig_th_trend = go.Figure(go.Bar(
                 x=_th_campus_week["label"],
                 y=_th_campus_week["disp"],
@@ -1533,11 +1840,9 @@ elif active_tab == "Thermal":
             fig_th_trend.update_layout(**plot_base(height=280), bargap=0.45, yaxis_title="MWh (Thermal)")
             fig_th_trend.update_yaxes(range=[0, _th_yt])
             st.plotly_chart(fig_th_trend, use_container_width=True)
-    else:
-        st.markdown(
-            '<div class="alert-blue" style="margin-top:4px;">'
-            '👈  Select a time period from the sidebar to see detailed thermal breakdowns by building.</div>',
-            unsafe_allow_html=True)
+    # NOTE: when selected_weeks is empty, the top-of-tab "All Buildings —
+    # Thermal Energy" block already shows a single "select a time period"
+    # notification. We intentionally do NOT duplicate it here.
 
     st.markdown(
         '<div style="font-size:0.85rem;color:#9ca3af;margin-top:12px;">'
@@ -1565,23 +1870,6 @@ elif active_tab == "DataIntegrity":
         '<p style="font-size:1.05rem;color:#6b7280;margin-top:2px;line-height:1.5;">'
         'Full sensor registry, verified data, gap analysis, and deployment notes.</p>',
         unsafe_allow_html=True)
-
-    # Source breakdown
-    st.markdown('<div class="sec-label">Data Source Summary</div>', unsafe_allow_html=True)
-    src1, src2, src3 = st.columns(3)
-    src1.metric("Raw CSV Files Loaded", str(_n_raw_files))
-    src2.metric("Dates from Raw CSVs", str(len(_raw_dates_loaded)))
-    src3.metric("Total Weeks Available", str(len(all_weeks)))
-
-    if _n_raw_files > 0:
-        _raw_week_labels_di = [week_label(w) for w in sorted(_raw_weeks)]
-        _weeks_str_di = ", ".join(_raw_week_labels_di) if len(_raw_week_labels_di) <= 4 else f"{len(_raw_week_labels_di)} weeks"
-        st.markdown(
-            f'<div class="alert-green">'
-            f'✅ <b>Live Raw Data Active:</b> {_n_raw_files} raw CSV file(s) processed directly '
-            f'using pipeline cleaning logic. Weeks sourced from raw files: <b>{_weeks_str_di}</b>. '
-            f'All other weeks use weekly_energy.csv.</div>',
-            unsafe_allow_html=True)
 
     # Latest week verified data table
     _di_latest   = all_weeks[-1]
