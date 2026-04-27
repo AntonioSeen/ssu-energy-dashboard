@@ -840,7 +840,7 @@ section[data-testid="stSidebar"] .sidebar-title {
     else:
         nav_opts_preview = ["📊 Electricity", "🔥 Thermal", "🔍 Data Integrity"]
     _tab = st.radio("nav", nav_opts_preview, label_visibility="collapsed")
-    active_tab = ("Overview" if "Overview" in _tab else
+    active_tab = ("Overview" if "Electricity" in _tab else
                   "Leaderboard" if "Leaderboard" in _tab else
                   "Thermal" if "Thermal" in _tab else "DataIntegrity")
     st.markdown("---")
