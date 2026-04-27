@@ -832,9 +832,17 @@ section[data-testid="stSidebar"] .sidebar-title {
 </style>
 """, unsafe_allow_html=True)
 
-    st.markdown("**View Mode**")
-    role = st.radio("mode", ["Student (Gamified)", "Admin (Basic)"],
-                    label_visibility="collapsed")
+    st.markdown('<p style="color:#4dabf7;font-size:1.25rem;font-weight:800;margin-bottom:4px;">Section</p>', unsafe_allow_html=True)
+    # Temporary placeholder role check to determine nav_opts — will be resolved after role radio below
+    _role_preview = st.session_state.get("_role_radio", "Student (Gamified)")
+    if _role_preview == "Student (Gamified)":
+        nav_opts_preview = ["📊 Overview", "🔥 Thermal", "🏆 Leaderboard", "🔍 Data Integrity"]
+    else:
+        nav_opts_preview = ["📊 Overview", "🔥 Thermal", "🔍 Data Integrity"]
+    _tab = st.radio("nav", nav_opts_preview, label_visibility="collapsed")
+    active_tab = ("Overview" if "Overview" in _tab else
+                  "Leaderboard" if "Leaderboard" in _tab else
+                  "Thermal" if "Thermal" in _tab else "DataIntegrity")
     st.markdown("---")
 
     # ── TIME RANGE ──────────────────────────────────────────────────────────
@@ -926,7 +934,7 @@ section[data-testid="stSidebar"] .sidebar-title {
         min_value=0.0, max_value=1.0, value=0.20, step=0.01,
         format="%.2f", label_visibility="collapsed", key="co2_emission_factor")
     st.markdown(
-        f'<div style="font-size:0.78rem;color:#a3bcd0;margin-top:4px;line-height:1.45;">'
+        f'<div style="font-size:1.0rem;font-weight:600;color:#a3bcd0;margin-top:4px;line-height:1.55;">'
         f'kg CO₂ produced per kWh of energy. '
         f'<b style="color:#ffffff">{EMISSION_FACTOR:.2f}</b> means '
         f'{EMISSION_FACTOR:.2f} kg CO₂ per 1 kWh used.<br>'
@@ -969,7 +977,7 @@ section[data-testid="stSidebar"] .sidebar-title {
         )
         # Tiny legend so the annotation is self-explanatory
         st.markdown(
-            '<div style="font-size:0.75rem;color:#a3bcd0;margin-top:6px;line-height:1.4;">'
+            '<div style="font-size:1.0rem;font-weight:600;color:#a3bcd0;margin-top:6px;line-height:1.55;">'
             'Buildings marked <b style="color:#ffffff">"(no thermal data)"</b> '
             'have electric meters only — selecting them in the Thermal tab will '
             'show no thermal breakdown.'
@@ -980,17 +988,17 @@ section[data-testid="stSidebar"] .sidebar-title {
 
     st.markdown("---")
 
-    st.markdown("**Section**")
+    st.markdown('<p style="color:#4dabf7;font-size:1.25rem;font-weight:800;margin-bottom:4px;">View Mode</p>', unsafe_allow_html=True)
+    role = st.radio("mode", ["Student (Gamified)", "Admin (Basic)"],
+                    label_visibility="collapsed", key="_role_radio")
+    # Re-derive nav_opts and active_tab now that role is known
     if role == "Student (Gamified)":
         nav_opts = ["📊 Overview", "🔥 Thermal", "🏆 Leaderboard", "🔍 Data Integrity"]
     else:
         nav_opts = ["📊 Overview", "🔥 Thermal", "🔍 Data Integrity"]
-    _tab = st.radio("nav", nav_opts, label_visibility="collapsed")
-    active_tab = ("Overview" if "Overview" in _tab else
-                  "Leaderboard" if "Leaderboard" in _tab else
-                  "Thermal" if "Thermal" in _tab else "DataIntegrity")
-
-    st.markdown("---")
+    # Keep active_tab consistent: if current _tab is no longer valid for this role, default to Overview
+    if _tab not in nav_opts:
+        active_tab = "Overview"
 
     # Latest date — show actual latest day not week
     if all_weeks:
@@ -1077,9 +1085,21 @@ if active_tab == "Overview":
     at1.metric("Total Energy Consumed", fmt_kwh(_at_total_kwh))
     at2.metric("Total Energy Cost", fmt_cost(_at_total_cost))
     at3.metric("Avg Power", fmt_power(_at_total_kwh, _at_days_span))
-    at4.metric("CO₂ Emitted (Est.)", fmt_co2(_at_total_kwh, EMISSION_FACTOR))
+    _co2_kg = _at_total_kwh * EMISSION_FACTOR
+    _co2_t  = _co2_kg / 1000.0
+    at4.markdown(
+        f'<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;'
+        f'padding:20px 22px;box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
+        f'<div style="font-size:0.82rem;font-weight:700;color:#6b7280;text-transform:uppercase;'
+        f'letter-spacing:0.1em;margin-bottom:4px;">CO₂ Emitted (Est.)</div>'
+        f'<div style="font-size:1.6rem;font-weight:800;color:#111827;letter-spacing:-0.03em;line-height:1.2;">'
+        f'{_co2_kg:,.0f} kg<br>'
+        f'<span style="font-size:1.3rem;">({_co2_t:,.0f} t)</span>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True)
     st.markdown(
-        '<p style="font-size:0.85rem;color:#6b7280;margin-top:-4px;line-height:1.4;">'
+        '<p style="font-size:1.05rem;font-weight:700;color:#374151;margin-top:-4px;line-height:1.4;">'
         '<b>Avg Power:</b> energy per hour over the period (kWh ÷ total hours). '
         f'<b>CO₂:</b> kWh × {EMISSION_FACTOR:.2f} kg/kWh — adjustable in the sidebar.'
         '</p>',
@@ -1845,7 +1865,7 @@ elif active_tab == "Thermal":
     # notification. We intentionally do NOT duplicate it here.
 
     st.markdown(
-        '<div style="font-size:0.85rem;color:#9ca3af;margin-top:12px;">'
+        '<div style="font-size:1.05rem;font-weight:700;color:#374151;margin-top:12px;">'
         'Thermal readings include BTU and kBTU sensors (heating hot water &amp; chilled water loops) '
         'converted to kWh using pipeline constants: BTU × 0.000293071, kBTU × 0.293071. '
         'All underlying numbers are identical to the Overview page.'
@@ -1908,7 +1928,7 @@ elif active_tab == "DataIntegrity":
     st.markdown(f'<div class="card">{v_tbl}</div>', unsafe_allow_html=True)
 
     st.markdown(
-        f'<div style="font-size:0.85rem;color:#9ca3af;margin-top:8px;margin-bottom:4px;">'
+        f'<div style="font-size:1.05rem;font-weight:700;color:#374151;margin-top:8px;margin-bottom:4px;">'
         f'Showing most recent week: {week_label(_di_latest)}. '
         f'kWh includes both electric meters and thermal energy sensors (heating &amp; cooling loops) '
         f'converted to kWh. Gas and water meters currently have no data available.'
