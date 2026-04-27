@@ -836,9 +836,9 @@ section[data-testid="stSidebar"] .sidebar-title {
     # Temporary placeholder role check to determine nav_opts — will be resolved after role radio below
     _role_preview = st.session_state.get("_role_radio", "Student (Gamified)")
     if _role_preview == "Student (Gamified)":
-        nav_opts_preview = ["📊 Overview", "🔥 Thermal", "🏆 Leaderboard", "🔍 Data Integrity"]
+        nav_opts_preview = ["📊 Electricity", "🔥 Thermal", "🏆 Leaderboard", "🔍 Data Integrity"]
     else:
-        nav_opts_preview = ["📊 Overview", "🔥 Thermal", "🔍 Data Integrity"]
+        nav_opts_preview = ["📊 Electricity", "🔥 Thermal", "🔍 Data Integrity"]
     _tab = st.radio("nav", nav_opts_preview, label_visibility="collapsed")
     active_tab = ("Overview" if "Overview" in _tab else
                   "Leaderboard" if "Leaderboard" in _tab else
@@ -993,9 +993,9 @@ section[data-testid="stSidebar"] .sidebar-title {
                     label_visibility="collapsed", key="_role_radio")
     # Re-derive nav_opts and active_tab now that role is known
     if role == "Student (Gamified)":
-        nav_opts = ["📊 Overview", "🔥 Thermal", "🏆 Leaderboard", "🔍 Data Integrity"]
+        nav_opts = ["📊 Electricity", "🔥 Thermal", "🏆 Leaderboard", "🔍 Data Integrity"]
     else:
-        nav_opts = ["📊 Overview", "🔥 Thermal", "🔍 Data Integrity"]
+        nav_opts = ["📊 Electricity", "🔥 Thermal", "🔍 Data Integrity"]
     # Keep active_tab consistent: if current _tab is no longer valid for this role, default to Overview
     if _tab not in nav_opts:
         active_tab = "Overview"
