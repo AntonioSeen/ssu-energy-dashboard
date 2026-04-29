@@ -24,27 +24,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-# ─── Single source of truth for pipeline constants ────────────────────────────
-# All cleaning/conversion/routing rules live in energy_core.py — the same
-# module master_pipeline.py imports from. Importing here (instead of keeping
-# private copies) guarantees the dashboard and the pipeline can never drift
-# on unit conversion factors, the _MBTU→kBTU remap, the gas-meter override,
-# the point-id → building map, or the raw-CSV filename pattern.
-#
-# Deployment: energy_core.py must sit alongside this file (same directory).
-# On Streamlit Community Cloud, commit it to the same repo.
-from energy_core import (
-    POINT_ID_MAP,
-    UNIT_TO_KWH,
-    VALID_UNITS,
-    ENERGY_UNITS,
-    THERMAL_UNITS,
-    RAW_CSV_RE,
-    parse_cell,
-    process_csv as _ec_process_csv,
-    to_kwh,
-)
-
 # ─── Logo loader ──────────────────────────────────────────────────────────────
 # Load the header banner from a PNG in the same folder as this script, rather
 # than embedding a large base64 blob inline. Both _LOGO_B64_LB (Leaderboard)
@@ -241,62 +220,175 @@ div[data-testid="column"] { padding: 0 6px !important; }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PIPELINE CONSTANTS  (must match master_pipeline.py exactly)
+# ══════════════════════════════════════════════════════════════════════════════
+UNIT_TO_KWH = {
+    "kWh":    1.0,
+    "Wh":     0.001,        # watt-hours → kilowatt-hours
+    "BTU":    0.000293071,
+    "MBTU":   293.071,
+    "kBTU":   0.293071,   # _MBTU label in BMS files is actually kBTU
+    "tonref": 3.51685,
+    "therm":  29.3071,
+}
+VALID_UNITS  = {"kWh", "Wh", "therm", "BTU", "tonref", "MBTU", "kBTU", "gallon"}
+ENERGY_UNITS = {"kWh", "Wh", "BTU", "MBTU", "kBTU", "tonref"}
+# Energy units that come from THERMAL sensors. kWh and Wh are electric; the
+# rest are heating/cooling loops. Used to split kWh totals into thermal vs
+# electric on the Thermal tab.
+THERMAL_UNITS = {"BTU", "MBTU", "kBTU", "tonref"}
+
+# point-id → (building_name, canonical_unit)
+POINT_ID_MAP = {
+    "1f97c82e-36e60525": ("Art Building",                "BTU"),
+    "1f97c82e-d1a92673": ("Art Building",                "BTU"),
+    "1f97c82e-525ca261": ("Schulz Info Center",          "BTU"),
+    "1f97c82e-c34c4f2e": ("Schulz Info Center",          "kWh"),
+    "206e94b8-3b05cb50": ("Schulz Info Center",          "therm"),
+    "1f97c82e-dd011464": ("ETC",                         "kWh"),
+    "1f98265e-39835c84": ("Green Music Center",          "BTU"),
+    "234aa956-82d369b2": ("Green Music Center",          "kBTU"),   # _MBTU in file → kBTU
+    "234ab131-e413ba29": ("Green Music Center",          "kWh"),
+    "234aab84-c656a0e0": ("Green Music Center",          "therm"),
+    "234aa782-f7b1eef2": ("Green Music Center",          "gallon"),
+    "1f98265e-cbf77175": ("Rachel Carson Hall",          "kWh"),
+    "234aa121-a983880d": ("Rachel Carson Hall",          "BTU"),
+    "234aa43b-a73abf5e": ("Rachel Carson Hall",          "BTU"),
+    "206d9425-f3361ab6": ("Ives Hall",                   "kWh"),
+    "234e3195-7d72fbdc": ("Ives Hall",                   "BTU"),
+    "234e3195-c20a1a8e": ("Ives Hall",                   "BTU"),
+    "206db469-c986212b": ("Physical Education",          "kWh"),
+    "20c9b2e1-d7263cf1": ("Salazar Hall",                "kWh"),
+    "234e4c64-930d1fd6": ("Salazar Hall",                "kWh"),
+    "20c9b4d5-5ea6aa0b": ("Salazar Hall",                "BTU"),
+    "234a6e2b-318cf13d": ("Boiler Plant",                "therm"),
+    "234e3ee2-b06b6c8c": ("Nichols Hall",                "BTU"),
+    "234e3ee2-f6fcea18": ("Nichols Hall",                "BTU"),
+    "234e40da-635bc7c1": ("Nichols Hall",                "kWh"),
+    "20c9aa07-acd1558a": ("Student Center",              "kWh"),
+    "234e5dff-6fe20abd": ("Student Center",              "BTU"),
+    "234e5dff-8d8eb031": ("Student Center",              "BTU"),
+    "234e61c5-021da430": ("Student Health Center",       "BTU"),
+    "234e61c5-83f6cf71": ("Student Health Center",       "BTU"),
+    "250ea73e-3b55a6cf": ("Wine Spectator Learning Ctr", "kWh"),
+    "251810ce-f429b841": ("Stevenson Hall",              "kWh"),
+    "267fcb62-ed42e3b3": ("Stevenson Hall",              "BTU"),
+    "267e6fd0-93d67a62": ("Darwin Hall",                 "kWh"),
+    "214981c7-5530731e": ("Campus Misc",                 "kWh"),
+    "214981c7-63077e46": ("Campus Misc",                 "kWh"),
+    "214981c7-dd0b1593": ("Campus Misc",                 "kWh"),
+}
+
+_RAW_CSV_RE = re.compile(r"^(\d{8})(int)?\.csv$", re.IGNORECASE)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PIPELINE CLEANING LOGIC
 # ══════════════════════════════════════════════════════════════════════════════
-# All constants and the per-cell parser were removed from this file in the
-# energy_core consolidation — see the import block at the top. The cleaning
-# rules (unit table, point-id map, _MBTU→kBTU remap, gas-meter override,
-# valid-unit set, thermal-unit subset, the cell-parsing regex with quote
-# stripping, and the raw-CSV filename pattern) now live exclusively in
-# energy_core.py and are shared with master_pipeline.py.
-#
-# `_process_one_csv` below is a thin wrapper: it delegates the actual work
-# to energy_core.process_csv (which returns a flat row-level DataFrame),
-# then re-shapes the result into the nested-dict structure the rest of this
-# module's downstream code expects.
+def _parse_cell(value):
+    """
+    Extract (numeric_value, unit_string) from a raw cell like '123.45kWh',
+    '184.92_MBTU', '27332409.59BTU'.
+
+    Critical rule (matches master_pipeline.py):
+        _MBTU suffix → remapped to kBTU (BMS sends kBTU but labels it _MBTU)
+    """
+    if pd.isna(value):
+        return None, None
+    s = str(value).strip()
+    if not s:
+        return None, None
+    m = re.match(r"^([\d.]+)(_?)([a-zA-Z]+)$", s)
+    if not m:
+        # Try bare numeric
+        try:
+            return float(s), None
+        except ValueError:
+            return None, None
+    num        = float(m.group(1))
+    underscore = m.group(2)
+    unit       = m.group(3)
+    # THE critical remap
+    if underscore == "_" and unit == "MBTU":
+        unit = "kBTU"
+    if unit in VALID_UNITS:
+        return num, unit
+    return num, None
+
 
 def _process_one_csv(filepath: str) -> dict:
     """
-    Wrapper over energy_core.process_csv. Aggregates the flat DataFrame it
-    returns into the nested dict shape this module's downstream code expects:
-
-        { date_str: { building: { 'kWh', 'thermal_kWh', 'therm', 'gallon' } } }
-
-    Numeric semantics are identical to the previous in-file implementation:
-      - 'kWh' is the sum of every energy-table row converted via to_kwh.
-      - 'thermal_kWh' is the subset of those rows whose unit is in
-        THERMAL_UNITS (BTU/kBTU/MBTU/tonref). kWh and Wh stay classified
-        as electric — exactly what the Thermal tab expects.
-      - 'therm' / 'gallon' are raw, no conversion.
+    Process a single raw CSV file.
+    Returns: { date_str: { building: { 'kWh': float, 'therm': float, 'gallon': float } } }
     """
-    cleaned, _stats = _ec_process_csv(filepath)
-    if cleaned.empty:
+    try:
+        df = pd.read_csv(filepath, low_memory=False)
+    except Exception:
         return {}
 
-    # energy_core writes timestamp as 'YYYY-MM-DD HH:MM:SS' — derive the
-    # bare date once for the per-day grouping the dashboard needs.
-    cleaned = cleaned.copy()
-    cleaned["_date"] = pd.to_datetime(cleaned["timestamp"], errors="coerce").dt.date.astype(str)
-    cleaned = cleaned[cleaned["_date"] != "NaT"]
-    if cleaned.empty:
+    if df.empty or len(df.columns) < 2:
         return {}
 
+    ts_col = df.columns[0]
+    try:
+        df["_ts"] = pd.to_datetime(
+            df[ts_col].astype(str).str.replace(r"\s*Los_Angeles$", "", regex=True),
+            errors="coerce",
+        )
+    except Exception:
+        return {}
+
+    df["_date"] = df["_ts"].dt.date.astype(str)
+    df = df[df["_date"] != "NaT"].copy()
+    if df.empty:
+        return {}
+
+    # accumulator: { date: { building: { unit_bucket: float } } }
     acc: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
-    for _, row in cleaned.iterrows():
-        d        = row["_date"]
-        bld      = row["building"]
-        unit     = row["unit"]
-        val      = float(row["value"])
-        tbl      = row["table"]
-        if tbl == "energy":
-            kwh = to_kwh(val, unit)
-            acc[d][bld]["kWh"] += kwh
-            if unit in THERMAL_UNITS:
-                acc[d][bld]["thermal_kWh"] += kwh
-        elif tbl == "gas":
-            acc[d][bld]["therm"] += val
-        elif tbl == "water":
-            acc[d][bld]["gallon"] += val
+
+    for col in df.columns:
+        if col in (ts_col, "_ts", "_date"):
+            continue
+        if "p:sonomastate:r:" not in col:
+            continue
+        pid = col.split("p:sonomastate:r:")[-1].strip()
+        if pid not in POINT_ID_MAP:
+            continue
+        building, map_unit = POINT_ID_MAP[pid]
+
+        for _, row in df.iterrows():
+            date_str = row["_date"]
+            cell     = row[col]
+            if pd.isna(cell):
+                continue
+
+            val_n, val_u = _parse_cell(cell)
+            if val_n is None:
+                continue
+
+            # Determine final unit (pipeline priority logic)
+            if val_u and val_u in VALID_UNITS:
+                # Cell carries an explicit unit — trust it, EXCEPT gas override
+                if map_unit == "therm" and val_u != "MBTU":
+                    final_unit = "therm"
+                else:
+                    final_unit = val_u
+            else:
+                final_unit = map_unit
+
+            # Route to bucket
+            if final_unit in ENERGY_UNITS:
+                kwh = val_n * UNIT_TO_KWH[final_unit]
+                acc[date_str][building]["kWh"] += kwh
+                # Thermal accounting matches master_pipeline.generate_weekly_csv:
+                # uses THERMAL_UNITS (BTU/kBTU/MBTU/tonref) so kWh AND Wh both
+                # correctly stay classified as electric.
+                if final_unit in THERMAL_UNITS:
+                    acc[date_str][building]["thermal_kWh"] += kwh
+            elif final_unit == "therm":
+                acc[date_str][building]["therm"] += val_n
+            elif final_unit == "gallon":
+                acc[date_str][building]["gallon"] += val_n
 
     return {d: dict(bmap) for d, bmap in acc.items()}
 
@@ -330,7 +422,7 @@ def _find_raw_csv_files() -> list[str]:
             continue
         for dirpath, _dirs, files in os.walk(root):
             for fname in files:
-                if RAW_CSV_RE.match(fname) and fname not in found_by_name:
+                if _RAW_CSV_RE.match(fname) and fname not in found_by_name:
                     found_by_name[fname] = os.path.join(dirpath, fname)
     return sorted(found_by_name.values())
 
@@ -580,54 +672,19 @@ def fmt_co2(kwh: float, factor: float) -> str:
     return f"{kg:,.0f} kg ({tons:,.0f} t)"
 
 
-def days_in_period(weeks: list, time_filter: str, df_scope: pd.DataFrame = None) -> float:
+def days_in_period(weeks: list, time_filter: str) -> float:
     """
-    Total exposure-days for a list of period keys, used as the denominator for
-    Avg Power (kWh ÷ hours).
-
-    Behaviour:
-      - Weekly  → 7 days per selected week (each Monday-of-ISO-week covers 7 days)
-      - Monthly → ACTUAL data span of weeks falling within the selected months.
-                  Computed as (latest_week_start − earliest_week_start).days + 7.
-      - Yearly  → ACTUAL data span of weeks falling within the selected years.
-                  Same span formula as Monthly.
-
-    Why span-based for Monthly/Yearly:
-      The all-time "Campus Energy" header card uses the actual data span as its
-      Avg Power denominator (line ~1080). If Monthly/Yearly used calendar-based
-      math (e.g. 366+365+365 = 1,096 days when all three years are selected),
-      the same kWh would be divided by ~2.3× more hours, producing a different
-      Avg Power on the "Selected Periods" card than the all-time card — even
-      when the user picks every available year.
-
-    Fallback: if df_scope is None or the selection is empty, returns the old
-    calendar-based math so existing call sites without df_scope still work.
-
-    df_scope must contain columns 'week' (string YYYY-MM-DD) and '_wstart'
-    (datetime). Pass df_all for campus-wide; pass df_all.loc[df_all.building==b]
-    for a single-building span.
+    Total exposure-days for a list of period keys.
+      - Weekly  → 7 days each
+      - Monthly → exact day count of the month string 'YYYY-MM'
+      - Yearly  → 366 if leap, else 365
+    Falls back to 7×N if a period key can't be parsed.
     """
     n = len(weeks) if weeks else 0
     if n == 0:
         return 0.0
     if time_filter == "Weekly":
         return n * 7.0
-
-    # Monthly / Yearly — prefer actual data span when df_scope is supplied
-    if df_scope is not None and not df_scope.empty and "_wstart" in df_scope.columns:
-        d = df_scope.dropna(subset=["_wstart"]).copy()
-        if time_filter == "Monthly":
-            d["_p"] = d["_wstart"].dt.to_period("M").astype(str)
-        elif time_filter == "Yearly":
-            d["_p"] = d["_wstart"].dt.year.astype(str)
-        else:
-            d["_p"] = None
-        d = d[d["_p"].isin([str(w) for w in weeks])]
-        if not d.empty:
-            return float((d["_wstart"].max() - d["_wstart"].min()).days + 7)
-        # else fall through to calendar fallback
-
-    # Fallback — calendar-based math
     if time_filter == "Monthly":
         total = 0.0
         for w in weeks:
@@ -700,12 +757,6 @@ if not _daily_df.empty and "thermal_kWh" in _daily_df.columns:
     df_all["_thermal_kWh_raw"] = df_all["_thermal_kWh_raw"].fillna(0.0)
     df_all["thermal_kWh"] = df_all[["thermal_kWh", "_thermal_kWh_raw"]].max(axis=1)
     df_all = df_all.drop(columns=["_thermal_kWh_raw"])
-    # Safety clamp: thermal_kWh must NEVER exceed total kWh. If it does, it
-    # means weekly_energy.csv (kWh column) and the raw-CSV thermal split came
-    # from inconsistent snapshots. Without this clamp, electric_kWh =
-    # (kWh - thermal_kWh).clip(0) silently zeros out a building's real
-    # electric consumption on the Thermal and Data Integrity tabs.
-    df_all["thermal_kWh"] = df_all[["thermal_kWh", "kWh"]].min(axis=1)
 # If no raw CSVs are available, df_all["thermal_kWh"] already has the correct
 # values from weekly_energy.csv (or 0.0 if the pipeline hasn't been updated yet).
 
@@ -1113,11 +1164,7 @@ if active_tab == "Overview":
 
         # Campus KPIs
         st.markdown('<div class="sec-label">Consumption During Selected Periods — All Buildings</div>', unsafe_allow_html=True)
-        # Pass df_all so Monthly/Yearly avg-power uses the actual data span
-        # (matches the all-time Campus Energy card). Without df_all, "all years
-        # selected" would divide by full calendar years (1096 days) instead of
-        # the actual ~483 days of data, producing a misleadingly low Avg Power.
-        _sel_days = days_in_period(sorted_sel, time_filter, df_all)
+        _sel_days = days_in_period(sorted_sel, time_filter)
         k1, k2, k3, k4 = st.columns(4)
         k1_label = (f"Energy During — {period_label(sorted_sel[0])}"
                     if len(sorted_sel) == 1
@@ -1246,13 +1293,7 @@ if active_tab == "Overview":
                      else f"Combined Cost of {len(sorted_sel)} Periods (@ ${ENERGY_RATE}/kWh)")
         bm1.metric(bm1_label, fmt_kwh(b_cur))
         bm2.metric(bm2_label, fmt_cost(b_cost))
-        # Per-building Avg Power: scope days to this building's actual data
-        # span within the selected periods. A building that started reporting
-        # late should not be averaged across the full campus span — that would
-        # understate its real power draw. Falls back to campus span if the
-        # building has no data in the period.
-        _b_scope = df_all[df_all["building"] == sel_bld]
-        bm3.metric("Avg Power", fmt_power(b_cur, days_in_period(sorted_sel, time_filter, _b_scope)))
+        bm3.metric("Avg Power", fmt_power(b_cur, days_in_period(sorted_sel, time_filter)))
         bm4.metric("CO₂ Emitted (Est.)", fmt_co2(b_cur, EMISSION_FACTOR))
 
         st.markdown(
@@ -1376,13 +1417,6 @@ elif active_tab == "Leaderboard":
     for b in all_pvt.columns:
         s, k = all_pvt[b].values, 0
         for i in range(len(s) - 1, 0, -1):
-            # A 0-kWh week is a meter outage, not a real reduction. Without
-            # this guard, a building going offline would falsely register a
-            # reduction streak (0 < anything_positive) and even climb the
-            # leaderboard. Treat any 0 in the comparison pair as "data
-            # missing" and stop counting.
-            if s[i] == 0 or s[i - 1] == 0:
-                break
             if s[i] < s[i - 1]: k += 1
             else: break
         streak_map[b] = k
@@ -1765,10 +1799,7 @@ elif active_tab == "Thermal":
                            else f"Combined Thermal Cost of {len(sorted_sel)} Periods (@ ${ENERGY_RATE}/kWh)")
             _tbm1.metric(_tbm1_label, fmt_kwh(_b_th_cur))
             _tbm2.metric(_tbm2_label, fmt_cost(_b_th_cost))
-            # Same scoping as Overview's per-building Avg Power: use this
-            # building's actual data span within the selected periods.
-            _th_b_scope = df_all[df_all["building"] == _th_sel_bld]
-            _tbm3.metric("Avg Thermal Power", fmt_power(_b_th_cur, days_in_period(sorted_sel, time_filter, _th_b_scope)))
+            _tbm3.metric("Avg Thermal Power", fmt_power(_b_th_cur, days_in_period(sorted_sel, time_filter)))
             _tbm4.metric("CO₂ Emitted (Est.)", fmt_co2(_b_th_cur, EMISSION_FACTOR))
 
             st.markdown(
