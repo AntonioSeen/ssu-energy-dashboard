@@ -1,5 +1,5 @@
 """
-master_pipeline.py — SSU Campus Energy Pipeline (consolidated).
+master_pipeline.py — SSU Campus Energy Pipeline 
 
 Pipeline stages:
   0. Test DB connection (required unique indexes verified on first run)
@@ -36,7 +36,7 @@ import pymysql
 import requests
 
 from energy_core import (
-    POINT_ID_MAP, UNIT_TO_KWH, ENERGY_UNITS,
+    POINT_ID_MAP, UNIT_TO_KWH, ENERGY_UNITS, THERMAL_UNITS,
     process_csv, to_kwh,
 )
 
@@ -87,7 +87,7 @@ def log(msg, level="INFO", error=False):
         pass
 
 
-# ── Email / PowerBI (unchanged) ───────────────────────────────────────────
+# ── Email / PowerBI  ───────────────────────────────────────────
 def send_email(subject, body, is_error=False):
     if not EMAIL_CONFIG["enabled"]:
         return
@@ -117,7 +117,7 @@ def refresh_powerbi():
         log(f"PowerBI error: {e}", "ERROR", error=True); return False
 
 
-# ── FTP download (preserved from original) ────────────────────────────────
+# ── FTP download  ────────────────────────────────
 def download_from_ftp():
     stats = {"downloaded": 0, "errors": 0}
     try:
@@ -259,7 +259,7 @@ def generate_weekly_csv(output_path=WEEKLY_CSV_PATH) -> bool:
             kwh_contribution = float(total) * UNIT_TO_KWH.get(unit, 0.0 if unit not in ENERGY_UNITS else 1.0)
             bld = building_of(loc)
             kwh_agg[(week, bld)] += kwh_contribution
-            if unit in ENERGY_UNITS and unit != "kWh":
+            if unit in THERMAL_UNITS:
                 thermal_kwh_agg[(week, bld)] += kwh_contribution
         for week, loc, _, total in gas_rows:
             gas_agg[(week, building_of(loc))] += float(total)
@@ -306,7 +306,7 @@ def main():
     start = datetime.now()
     log("=" * 70); log("SSU ENERGY PIPELINE STARTED")
 
-    stats = {"downloaded": 0, "processed": 0, "inserted": 0, "errors": 0}
+    stats = {"downloaded": 0, "processed": 0, "skipped": 0, "inserted": 0, "errors": 0}
 
     # Phase 0 — DB sanity
     try:
@@ -340,7 +340,7 @@ def main():
             if pstats["error"] or cleaned.empty:
                 log(f"  skip: {pstats['error'] or 'no data'}", "WARNING")
                 move_to(FAILED_DIR, src, folder)
-                stats["errors"] += 1
+                stats["skipped"] += 1
                 continue
             db = push_to_db(cleaned)
             stats["processed"] += 1
@@ -357,7 +357,8 @@ def main():
     end = datetime.now()
     summary = (f"Status: {'OK' if stats['errors']==0 else 'WITH ERRORS'}\n"
                f"Duration: {(end-start).total_seconds():.1f}s\n"
-               f"Downloaded: {stats['downloaded']}  Processed: {stats['processed']}\n"
+               f"Downloaded: {stats['downloaded']}  Processed: {stats['processed']}  "
+               f"Skipped: {stats['skipped']}\n"
                f"DB inserts: {stats['inserted']}  Errors: {stats['errors']}\n"
                f"Output: {WEEKLY_CSV_PATH}\n")
     log(summary)
