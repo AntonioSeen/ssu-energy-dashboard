@@ -19,11 +19,17 @@ from collections import defaultdict
 import pandas as pd
 
 # ── Units ─────────────────────────────────────────────────────────────────
-VALID_UNITS  = {"kWh", "therm", "BTU", "tonref", "MBTU", "kBTU", "gallon"}
-ENERGY_UNITS = {"kWh", "BTU", "MBTU", "kBTU", "tonref"}
+VALID_UNITS  = {"kWh", "Wh", "therm", "BTU", "tonref", "MBTU", "kBTU", "gallon"}
+ENERGY_UNITS = {"kWh", "Wh", "BTU", "MBTU", "kBTU", "tonref"}
+# Energy units that come from THERMAL sensors (heating hot water, chilled
+# water, chiller output). Everything else in ENERGY_UNITS — kWh, Wh — is
+# electric. Used by the pipeline + dashboard to split kWh into electric vs
+# thermal in weekly_energy.csv. Defined here so the rule lives in ONE place.
+THERMAL_UNITS = {"BTU", "MBTU", "kBTU", "tonref"}
 
 UNIT_TO_KWH = {
     "kWh":    1.0,
+    "Wh":     0.001,        # watt-hours → kilowatt-hours
     "BTU":    0.000293071,
     "MBTU":   293.071,      # true megaBTU = 1,000,000 BTU
     "kBTU":   0.293071,     # BMS sends "_MBTU" label but values are kBTU
@@ -87,6 +93,7 @@ def parse_cell(value):
 
     Handles:
         '150.5kWh'     → (150.5,  'kWh')
+        '9000000Wh'    → (9000000.0, 'Wh')   # legacy meters that report watt-hours
         '184.82_MBTU'  → (184.82, 'kBTU')    # BMS mislabel — critical remap
         '27332.59BTU'  → (27332.59, 'BTU')
         '12.5gallon'   → (12.5,   'gallon')
