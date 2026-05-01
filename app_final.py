@@ -171,8 +171,10 @@ section[data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.12) !impo
 .main .stRadio div[role="radiogroup"] label p,
 section.main .stRadio div[role="radiogroup"] label,
 [data-testid="stAppViewContainer"] .main .stRadio div[role="radiogroup"] label {
-    color: #111827 !important;
-    font-weight: 600 !important;
+    color: #0f172a !important;
+    font-weight: 800 !important;
+    font-size: 1.05rem !important;
+    letter-spacing: -0.01em !important;
 }
 
 [data-testid="collapsedControl"] { background-color: #1b3a5c !important; border-right: 2px solid #2a5180 !important; }
