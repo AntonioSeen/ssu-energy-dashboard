@@ -1614,7 +1614,7 @@ elif active_tab == "Thermal":
         name="Thermal (BTU/kBTU → kWh)",
         x=_th_merged_view["_label"],
         y=_th_merged_view["thermal_kWh"] / 1000,
-        marker_color="#7c3aed",
+        marker_color="#ec4899",
         hovertemplate="<b>%{x}</b><br>Thermal: %{y:.1f} MWh<extra></extra>",
     ))
     fig_th_stack.update_layout(
@@ -1658,7 +1658,7 @@ elif active_tab == "Thermal":
             fig_th_all = go.Figure(go.Bar(
                 name=period_label(_th_chart_weeks[0]),
                 y=_ldf["building"], x=_ldf["disp"],
-                orientation="h", marker_color="#7c3aed",
+                orientation="h", marker_color="#ec4899",
                 text=[f"{v:.1f}" for v in _ldf["disp"]],
                 textposition="outside",
                 textfont=dict(size=19, color="#111827", family="Inter", weight=700),
@@ -1671,7 +1671,7 @@ elif active_tab == "Thermal":
             fig_th_all.update_xaxes(tickfont=dict(size=17, color="#111827", family="Inter", weight=700))
             st.plotly_chart(fig_th_all, use_container_width=True)
         else:
-            _th_palette = ["#7c3aed", "#3b82f6", "#6366f1", C_SLATE]
+            _th_palette = ["#ec4899", "#3b82f6", "#6366f1", C_SLATE]
             # Buildings that reported any thermal energy across selected periods
             _th_all_blds = (_th_by_bld.groupby("building")["thermal_kWh"].sum()
                             .loc[lambda s: s > 0].index.tolist())
@@ -1797,7 +1797,7 @@ elif active_tab == "Thermal":
                 _bld_th_trend["disp"]  = (_bld_th_trend["thermal_kWh"] / 1000).clip(lower=0.0)
                 _fig_bld_th = go.Figure(go.Bar(
                     x=_bld_th_trend["label"], y=_bld_th_trend["disp"],
-                    marker_color="#7c3aed",
+                    marker_color="#ec4899",
                     text=[f"{v:.1f} MWh" if v > 0 else "0" for v in _bld_th_trend["disp"]],
                     textposition="outside",
                     textfont=dict(size=16, color=PLOT_TEXT, family="Inter", weight=700),
@@ -1831,7 +1831,7 @@ elif active_tab == "Thermal":
             fig_th_trend = go.Figure(go.Bar(
                 x=_th_campus_week["label"],
                 y=_th_campus_week["disp"],
-                marker_color="#7c3aed",
+                marker_color="#ec4899",
                 text=[f"{v:.1f} MWh" if v > 0 else "0" for v in _th_campus_week["disp"]],
                 textposition="outside",
                 textfont=dict(size=14, color=PLOT_TEXT, family="Inter", weight=700),
