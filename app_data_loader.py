@@ -1,18 +1,16 @@
 """
-app_data_loader.py — REPLACEMENT for lines ~168-471 of app_helpppp.py.
+app_data_loader.py — Streamlit Cloud reads weekly_energy.csv from Hostinger.
 
-Before: dashboard re-cleans raw CSVs at every page load, ignoring
-weekly_energy.csv. This duplicated the pipeline's logic and ran on every
-cache miss.
+Single source of truth lives on Hostinger Premium. The dashboard does NOT
+re-clean raw CSVs at page load anymore — the cron-driven pipeline owns the
+CSV, and the dashboard fetches it over HTTPS with a 5-minute cache.
 
-After: dashboard reads weekly_energy.csv directly. energy_core.py is
-imported only for backfill when a week is missing from the CSV (e.g.
-pipeline hasn't run yet today). This preserves the "raw overrides stale"
-behaviour WITHOUT duplicating the cleaning code.
+If the remote CSV is unreachable (network blip, deploy in flight), the
+dashboard shows a warning and falls back to whatever raw CSVs may still be
+present locally — same behaviour as before, just much rarer.
 
-Drop this at the top of app.py and delete the old _parse_cell,
-_process_one_csv, _process_raw_csvs, POINT_ID_MAP, UNIT_TO_KWH, and
-load_daily_data functions.
+Required Streamlit secret (Settings → Secrets):
+    WEEKLY_CSV_URL = "https://faridfarahmand.net/data/weekly_energy.csv"
 """
 from __future__ import annotations
 import os
@@ -26,14 +24,17 @@ from energy_core import (
     RAW_CSV_RE, process_csv, to_kwh,
 )
 
-BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
-WEEKLY_CSV_PATH = os.path.join(BASE_DIR, "weekly_energy.csv")
-WEEKLY_COLS     = ["week", "building", "kWh", "gas_therm",
-                   "water_gallon", "heating_dd", "normalized_kWh"]
+BASE_DIR       = os.path.dirname(os.path.abspath(__file__))
+WEEKLY_CSV_URL = st.secrets.get(
+    "WEEKLY_CSV_URL",
+    "https://faridfarahmand.net/data/weekly_energy.csv",
+)
+WEEKLY_COLS    = ["week", "building", "kWh", "thermal_kWh", "gas_therm",
+                  "water_gallon", "heating_dd", "normalized_kWh"]
 
 
 def _find_raw_csvs():
-    """Discover raw CSVs in ./, ./raw_data, ./uploads."""
+    """Local fallback only — used if the remote CSV is unreachable."""
     found = set()
     for d in (BASE_DIR, os.path.join(BASE_DIR, "raw_data"),
               os.path.join(BASE_DIR, "uploads")):
@@ -47,9 +48,8 @@ def _find_raw_csvs():
 
 def _backfill_from_raw(existing_weeks: set[str]) -> pd.DataFrame:
     """
-    If raw CSVs exist for dates whose ISO-week is NOT yet in weekly_energy.csv,
-    clean them on the fly so the dashboard isn't blind between pipeline runs.
-    Weeks already present in the CSV are skipped — the pipeline is authoritative.
+    Last-resort cleaning if the remote CSV is unreachable AND raw files are
+    available locally. In normal operation this returns an empty DataFrame.
     """
     files = _find_raw_csvs()
     if not files:
@@ -65,7 +65,7 @@ def _backfill_from_raw(existing_weeks: set[str]) -> pd.DataFrame:
         for _, r in cleaned.iterrows():
             wk, bld = r["_week"], r["building"]
             if wk in existing_weeks:
-                continue                                # pipeline already has it
+                continue
             if r["table"] == "energy":
                 agg[wk][bld]["kWh"] += to_kwh(r["value"], r["unit"])
             elif r["table"] == "gas":
@@ -78,10 +78,11 @@ def _backfill_from_raw(existing_weeks: set[str]) -> pd.DataFrame:
             b = agg[wk][bld]
             rows.append({
                 "week": wk, "building": bld,
-                "kWh": round(b["kWh"], 6),
-                "gas_therm": round(b["gas"], 6),
-                "water_gallon": round(b["water"], 6),
-                "heating_dd": 0.0,
+                "kWh":            round(b["kWh"], 6),
+                "thermal_kWh":    0.0,
+                "gas_therm":      round(b["gas"], 6),
+                "water_gallon":   round(b["water"], 6),
+                "heating_dd":     0.0,
                 "normalized_kWh": round(b["kWh"], 6),
             })
     return pd.DataFrame(rows, columns=WEEKLY_COLS)
@@ -90,27 +91,26 @@ def _backfill_from_raw(existing_weeks: set[str]) -> pd.DataFrame:
 @st.cache_data(ttl=300, show_spinner=False)
 def load_weekly() -> pd.DataFrame:
     """
-    Authoritative weekly DataFrame for the dashboard.
+    Authoritative weekly DataFrame.
 
     Priority:
-      1. weekly_energy.csv (pipeline output)   — trusted baseline
-      2. Raw-CSV backfill                      — only for weeks NOT in #1
-
-    This replaces the old daily-cleaning logic. daily_energy.csv is no
-    longer consulted anywhere.
+      1. weekly_energy.csv from Hostinger over HTTPS  — pipeline output
+      2. Local raw-CSV backfill                       — only if URL unreachable
     """
-    if os.path.exists(WEEKLY_CSV_PATH):
-        weekly = pd.read_csv(WEEKLY_CSV_PATH)
+    try:
+        weekly = pd.read_csv(WEEKLY_CSV_URL)
         for c in WEEKLY_COLS:
             if c not in weekly.columns:
                 weekly[c] = 0.0
         weekly = weekly[WEEKLY_COLS].copy()
-    else:
+    except Exception as e:
+        st.warning(f"Remote CSV unreachable ({e}); falling back to local data.")
         weekly = pd.DataFrame(columns=WEEKLY_COLS)
 
-    existing_weeks = set(weekly["week"].astype(str)) if not weekly.empty else set()
-    backfill = _backfill_from_raw(existing_weeks)
+    # Backfill only kicks in when the remote fetch failed entirely.
+    if weekly.empty:
+        backfill = _backfill_from_raw(set())
+        weekly = backfill if not backfill.empty else weekly
 
-    combined = pd.concat([weekly, backfill], ignore_index=True) if not backfill.empty else weekly
-    combined = combined[combined["kWh"] >= 0].copy()
-    return combined
+    weekly = weekly[weekly["kWh"] >= 0].copy()
+    return weekly
