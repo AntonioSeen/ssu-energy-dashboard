@@ -164,9 +164,7 @@ section[data-testid="stSidebar"] .stMultiSelect > label,
 section[data-testid="stSidebar"] .stSelectbox > label { color: #a3bcd0 !important; font-size: 1.0rem !important; font-weight: 700 !important; text-transform: uppercase !important; letter-spacing: 0.08em !important; }
 section[data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.12) !important; }
 
-/* Main-area horizontal radios (e.g. "Last 12 months / All time" toggles).
-   Without this, Streamlit's default theme leaves the option labels invisible
-   on the light page background. Scoped to NOT override sidebar rules. */
+/* Main-area horizontal radios (e.g. "Last 12 months / All time" toggles). */
 .main .stRadio div[role="radiogroup"] label,
 .main .stRadio div[role="radiogroup"] label p,
 section.main .stRadio div[role="radiogroup"] label,
@@ -174,7 +172,13 @@ section.main .stRadio div[role="radiogroup"] label,
     color: #0f172a !important;
     font-weight: 800 !important;
     font-size: 1.05rem !important;
-    letter-spacing: -0.01em !important;
+}
+/* Force text black even inside the highlighted/selected blue pill */
+.main .stRadio div[role="radiogroup"] label span,
+.main .stRadio div[role="radiogroup"] label p span,
+section.main .stRadio div[role="radiogroup"] label span {
+    color: #0f172a !important;
+    font-weight: 800 !important;
 }
 
 [data-testid="collapsedControl"] { background-color: #1b3a5c !important; border-right: 2px solid #2a5180 !important; }
