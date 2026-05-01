@@ -164,22 +164,14 @@ section[data-testid="stSidebar"] .stMultiSelect > label,
 section[data-testid="stSidebar"] .stSelectbox > label { color: #a3bcd0 !important; font-size: 1.0rem !important; font-weight: 700 !important; text-transform: uppercase !important; letter-spacing: 0.08em !important; }
 section[data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.12) !important; }
 
-/* Main-area horizontal radios (e.g. "Last 12 months / All time" toggles). */
-.main .stRadio div[role="radiogroup"] label,
-.main .stRadio div[role="radiogroup"] label p,
-section.main .stRadio div[role="radiogroup"] label,
-[data-testid="stAppViewContainer"] .main .stRadio div[role="radiogroup"] label {
-    color: #0f172a !important;
-    font-weight: 800 !important;
-    font-size: 1.05rem !important;
-}
-/* Force text black even inside the highlighted/selected blue pill */
-.main .stRadio div[role="radiogroup"] label span,
-.main .stRadio div[role="radiogroup"] label p span,
-section.main .stRadio div[role="radiogroup"] label span {
-    color: #0f172a !important;
-    font-weight: 800 !important;
-}
+/* Last 12 months / All time toggle — force visible dark text everywhere */
+div[role="radiogroup"] label { color: #000000 !important; font-weight: 900 !important; font-size: 1.1rem !important; }
+div[role="radiogroup"] label p { color: #000000 !important; font-weight: 900 !important; font-size: 1.1rem !important; }
+div[role="radiogroup"] label span { color: #000000 !important; font-weight: 900 !important; }
+div[role="radiogroup"] label div { color: #000000 !important; }
+div[data-testid="stHorizontalBlock"] div[role="radiogroup"] label,
+div[data-testid="stHorizontalBlock"] div[role="radiogroup"] label p,
+div[data-testid="stHorizontalBlock"] div[role="radiogroup"] label span { color: #000000 !important; font-weight: 900 !important; font-size: 1.1rem !important; }
 
 [data-testid="collapsedControl"] { background-color: #1b3a5c !important; border-right: 2px solid #2a5180 !important; }
 [data-testid="collapsedControl"] button [data-testid="stIconMaterial"],
