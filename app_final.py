@@ -62,19 +62,32 @@ _LOGO_B64_DI = _LOGO_B64_LB
 
 def load_weekly() -> pd.DataFrame:
     """
-    Read weekly_energy.csv from the same directory as this script.
-    This replaces the external app_data_loader module so the app is fully
-    self-contained and works on Streamlit Community Cloud without any
-    additional files beyond weekly_energy.csv, daily_energy.csv, and
-    dashboard_header.png.
+    Fetch weekly_energy.csv from the Hostinger pipeline output.
+
+    The Hostinger cron regenerates the CSV daily at 06:00. The dashboard
+    fetches it over HTTPS and caches the result; the URL is configurable
+    via the Streamlit secret WEEKLY_CSV_URL. If the remote fetch fails
+    (network blip, deploy in flight), falls back to the local copy
+    committed alongside the app — keeps the dashboard working even if
+    Hostinger is briefly unreachable.
     """
-    base = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(base, "weekly_energy.csv")
-    if not os.path.exists(csv_path):
-        return pd.DataFrame(columns=["week", "building", "kWh", "thermal_kWh",
-                                     "gas_therm", "water_gallon",
-                                     "heating_dd", "normalized_kWh"])
-    df = pd.read_csv(csv_path, low_memory=False)
+    cols = ["week", "building", "kWh", "thermal_kWh", "gas_therm",
+            "water_gallon", "heating_dd", "normalized_kWh"]
+    url = st.secrets.get("WEEKLY_CSV_URL",
+                         "https://faridfarahmand.net/data/weekly_energy.csv")
+    df = None
+    try:
+        df = pd.read_csv(url, low_memory=False)
+    except Exception as e:
+        st.warning(f"Remote CSV unreachable ({e}); falling back to local copy.")
+        base = os.path.dirname(os.path.abspath(__file__))
+        csv_path = os.path.join(base, "weekly_energy.csv")
+        if os.path.exists(csv_path):
+            df = pd.read_csv(csv_path, low_memory=False)
+
+    if df is None or df.empty:
+        return pd.DataFrame(columns=cols)
+
     # Normalise week column — accept YYYY-MM-DD or YYYY-MM-DD/YYYY-MM-DD
     df["week"] = df["week"].astype(str).str.strip().str.split("/").str[0]
     df["week"] = pd.to_datetime(df["week"], errors="coerce").dt.strftime("%Y-%m-%d")
@@ -145,10 +158,10 @@ section[data-testid="stSidebar"] *:not([data-testid="stIconMaterial"]):not(.mate
 section[data-testid="stSidebar"] h1,
 section[data-testid="stSidebar"] h2,
 section[data-testid="stSidebar"] h3 { color: #ffffff !important; font-weight: 700 !important; font-size: 1.1rem !important; }
-section[data-testid="stSidebar"] .stRadio > label { color: #a3bcd0 !important; font-size: 0.82rem !important; font-weight: 700 !important; text-transform: uppercase !important; letter-spacing: 0.1em !important; }
+section[data-testid="stSidebar"] .stRadio > label { color: #a3bcd0 !important; font-size: 1.0rem !important; font-weight: 700 !important; text-transform: uppercase !important; letter-spacing: 0.08em !important; }
 section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label { font-size: 1.05rem !important; font-weight: 500 !important; color: #c8d9ea !important; text-transform: none !important; letter-spacing: 0 !important; }
 section[data-testid="stSidebar"] .stMultiSelect > label,
-section[data-testid="stSidebar"] .stSelectbox > label { color: #a3bcd0 !important; font-size: 0.82rem !important; font-weight: 700 !important; text-transform: uppercase !important; letter-spacing: 0.1em !important; }
+section[data-testid="stSidebar"] .stSelectbox > label { color: #a3bcd0 !important; font-size: 1.0rem !important; font-weight: 700 !important; text-transform: uppercase !important; letter-spacing: 0.08em !important; }
 section[data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.12) !important; }
 
 /* Main-area horizontal radios (e.g. "Last 12 months / All time" toggles).
@@ -806,7 +819,7 @@ section[data-testid="stSidebar"] .sidebar-title {
 
     if time_filter == "Weekly":
         avail_w = all_weeks
-        st.markdown("**Select up to 4 weeks**")
+        st.markdown('<p style="color:#c8d9ea;font-size:1.0rem;font-weight:700;margin-bottom:2px;">Select up to 4 weeks</p>', unsafe_allow_html=True)
         _default_weeks = [_latest_week_default] if _latest_week_default else []
         selected_weeks = st.multiselect(
             "weeks", avail_w, default=_default_weeks,
@@ -826,7 +839,7 @@ section[data-testid="stSidebar"] .sidebar-title {
         def month_label(p):
             try:    return pd.to_datetime(p + "-01").strftime("%B %Y")
             except: return str(p)
-        st.markdown("**Select up to 4 months**")
+        st.markdown('<p style="color:#c8d9ea;font-size:1.0rem;font-weight:700;margin-bottom:2px;">Select up to 4 months</p>', unsafe_allow_html=True)
         selected_weeks = st.multiselect(
             "months", all_periods, default=[],
             format_func=month_label, label_visibility="collapsed")
@@ -843,7 +856,7 @@ section[data-testid="stSidebar"] .sidebar-title {
                   .reset_index().rename(columns={"_period": "week"}))
         all_periods = sorted(yearly["week"].unique())
         def year_label(p): return str(p)
-        st.markdown("**Select years**")
+        st.markdown('<p style="color:#c8d9ea;font-size:1.0rem;font-weight:700;margin-bottom:2px;">Select years</p>', unsafe_allow_html=True)
         selected_weeks = st.multiselect(
             "years", all_periods, default=[],
             format_func=year_label, label_visibility="collapsed")
@@ -854,7 +867,7 @@ section[data-testid="stSidebar"] .sidebar-title {
 
     # ── COST ────────────────────────────────────────────────────────────────
     st.markdown('<p style="color:#4dabf7;font-size:1.25rem;font-weight:800;margin-bottom:4px;">Cost</p>', unsafe_allow_html=True)
-    st.markdown('<p style="color:#a3bcd0;font-size:0.82rem;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">Estimated Cost Rate ($/kWh)</p>', unsafe_allow_html=True)
+    st.markdown('<p style="color:#a3bcd0;font-size:1.0rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:2px;">Estimated Cost Rate ($/kWh)</p>', unsafe_allow_html=True)
     COST_RATE_OPTIONS = {
         "$0.10 / kWh": 0.10,
         "$0.12 / kWh": 0.12,
@@ -869,21 +882,21 @@ section[data-testid="stSidebar"] .sidebar-title {
         index=2, label_visibility="collapsed")
     ENERGY_RATE = COST_RATE_OPTIONS[selected_rate_label]
     st.markdown(
-        f'<div style="font-size:0.8rem;color:#a3bcd0;margin-top:4px;margin-bottom:2px;">'
+        f'<div style="font-size:1.05rem;font-weight:600;color:#c8d9ea;margin-top:6px;margin-bottom:4px;">'
         f'All cost estimates use <b style="color:#ffffff">${ENERGY_RATE:.2f}/kWh</b></div>',
         unsafe_allow_html=True)
 
     # CO₂ emission factor (kg per kWh) — drives all CO₂ readouts on the page.
     st.markdown(
-        '<p style="color:#a3bcd0;font-size:0.82rem;font-weight:700;text-transform:uppercase;'
-        'letter-spacing:0.1em;margin-top:14px;margin-bottom:2px;">CO₂ Emission Factor</p>',
+        '<p style="color:#a3bcd0;font-size:1.0rem;font-weight:700;text-transform:uppercase;'
+        'letter-spacing:0.06em;margin-top:14px;margin-bottom:2px;">CO₂ Emission Factor</p>',
         unsafe_allow_html=True)
     EMISSION_FACTOR = st.number_input(
         "CO₂ Emission Factor (kg CO₂ / kWh)",
         min_value=0.0, max_value=1.0, value=0.20, step=0.01,
         format="%.2f", label_visibility="collapsed", key="co2_emission_factor")
     st.markdown(
-        f'<div style="font-size:1.0rem;font-weight:600;color:#a3bcd0;margin-top:4px;line-height:1.55;">'
+        f'<div style="font-size:1.05rem;font-weight:600;color:#c8d9ea;margin-top:4px;line-height:1.6;">'
         f'kg CO₂ produced per kWh of energy. '
         f'<b style="color:#ffffff">{EMISSION_FACTOR:.2f}</b> means '
         f'{EMISSION_FACTOR:.2f} kg CO₂ per 1 kWh used.<br>'
@@ -926,7 +939,7 @@ section[data-testid="stSidebar"] .sidebar-title {
         )
         # Tiny legend so the annotation is self-explanatory
         st.markdown(
-            '<div style="font-size:1.0rem;font-weight:600;color:#a3bcd0;margin-top:6px;line-height:1.55;">'
+            '<div style="font-size:1.05rem;font-weight:600;color:#c8d9ea;margin-top:6px;line-height:1.6;">'
             'Buildings marked <b style="color:#ffffff">"(no thermal data)"</b> '
             'have electric meters only — selecting them in the Thermal tab will '
             'show no thermal breakdown.'
@@ -955,7 +968,7 @@ section[data-testid="stSidebar"] .sidebar-title {
     else:
         _latest_day_display = "—"
     st.markdown(
-        f'<div style="font-size:0.82rem;color:#6a9cc0;line-height:1.8;">'
+        f'<div style="font-size:1.0rem;font-weight:600;color:#7ab4d4;line-height:1.9;">'
         f'{len(all_weeks)} week(s) in database<br>'
         f'Latest: {_latest_day_display}</div>',
         unsafe_allow_html=True)
