@@ -1028,9 +1028,9 @@ if active_tab == "Overview":
     # Dynamic date range label
     if not _at_monthly.empty:
         _first_month = _at_monthly["_month"].iloc[0].to_timestamp().strftime("%b %Y")
-        _last_month = _at_monthly["_month"].iloc[-1].to_timestamp() + pd.offsets.MonthEnd(0)
-        _last_month_str = _last_month.strftime("%b %d, %Y")
-        _at_section_label = f"Campus Energy — {_first_month} to {_last_month_str}"
+        _latest_day = (pd.to_datetime(df_weekly["week"]) + pd.to_timedelta(6, unit="D")).max()
+        _last_day_str = _latest_day.strftime("%b %d, %Y")
+        _at_section_label = f"Campus Energy — {_first_month} to {_last_day_str}"
     else:
         _at_section_label = "Campus Energy — All Time"
     st.markdown(f'<div class="sec-label">{_at_section_label}</div>', unsafe_allow_html=True)
