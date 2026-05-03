@@ -816,7 +816,9 @@ section[data-testid="stSidebar"] .sidebar-title {
     _latest_week_default = all_weeks[-1] if all_weeks else None
 
     if time_filter == "Weekly":
-        avail_w = all_weeks
+        # Show newest weeks at the top of the dropdown — easier to find recent
+        # data; the user almost always wants the most recent week first.
+        avail_w = list(reversed(all_weeks))
         st.markdown('<p style="color:#c8d9ea;font-size:1.0rem;font-weight:700;margin-bottom:2px;">Select up to 4 weeks</p>', unsafe_allow_html=True)
         _default_weeks = [_latest_week_default] if _latest_week_default else []
         selected_weeks = st.multiselect(
@@ -833,7 +835,8 @@ section[data-testid="stSidebar"] .sidebar-title {
                         gas_therm=("gas_therm", "sum"),
                         water_gallon=("water_gallon", "sum"))
                    .reset_index().rename(columns={"_period": "week"}))
-        all_periods = sorted(monthly["week"].unique())
+        # Newest months at the top of the dropdown.
+        all_periods = sorted(monthly["week"].unique(), reverse=True)
         def month_label(p):
             try:    return pd.to_datetime(p + "-01").strftime("%B %Y")
             except: return str(p)
@@ -852,7 +855,8 @@ section[data-testid="stSidebar"] .sidebar-title {
                        gas_therm=("gas_therm", "sum"),
                        water_gallon=("water_gallon", "sum"))
                   .reset_index().rename(columns={"_period": "week"}))
-        all_periods = sorted(yearly["week"].unique())
+        # Newest years at the top of the dropdown.
+        all_periods = sorted(yearly["week"].unique(), reverse=True)
         def year_label(p): return str(p)
         st.markdown('<p style="color:#c8d9ea;font-size:1.0rem;font-weight:700;margin-bottom:2px;">Select years</p>', unsafe_allow_html=True)
         selected_weeks = st.multiselect(
@@ -906,19 +910,47 @@ section[data-testid="stSidebar"] .sidebar-title {
     # ── BUILDING DETAIL ──────────────────────────────────────────────────────
     st.markdown('<p style="color:#4dabf7;font-size:1.25rem;font-weight:800;margin-bottom:4px;">Building Detail</p>', unsafe_allow_html=True)
 
-    # Compute the building list once here — all buildings that have ever reported
-    # data, sorted by total kWh (highest first). This drives the Overview and
-    # Thermal pages.
+    # Compute the building list dynamically:
+    # - On Electricity / Leaderboard / Data Integrity: buildings that report
+    #   ANY kWh in the currently-selected periods, sorted by total kWh desc.
+    # - On Thermal: only buildings with thermal_kWh > 0 in the selected
+    #   periods (so picking one always shows real thermal data).
+    # - When the user has NOT selected any period yet (multiselect empty,
+    #   only happens on Monthly/Yearly), fall back to all-time stats so the
+    #   sidebar isn't empty before the user has chosen anything.
     _sidebar_bld_options = []
-    _sidebar_thermal_blds = set()  # buildings with non-zero thermal across all data
+    _sidebar_thermal_blds = set()  # set of buildings with thermal data ever (for the legend)
     if all_weeks:
-        _temp_by_bld = df_all.groupby(["week", "building"])["kWh"].sum().reset_index()
-        _all_bld_kwh = _temp_by_bld.groupby("building")["kWh"].sum().sort_values(ascending=False).reset_index()
-        _sidebar_bld_options = _all_bld_kwh["building"].tolist()
-        # Identify which buildings have thermal data for the (none) annotation.
-        # Uses df_all so the answer is stable across time-range changes.
-        _th_by_bld_total = df_all.groupby("building")["thermal_kWh"].sum()
+        # Always compute the "thermal-ever" set first — drives the legend below
+        _th_by_bld_total      = df_all.groupby("building")["thermal_kWh"].sum()
         _sidebar_thermal_blds = set(_th_by_bld_total[_th_by_bld_total > 0].index.tolist())
+
+        # Now compute the option list, scoped to selection + active tab
+        _scope_periods = list(selected_weeks) if selected_weeks else None  # None = all-time
+        _scope_df      = df_view.copy()
+        if _scope_periods is not None:
+            _scope_df = _scope_df[_scope_df["week"].isin(_scope_periods)]
+
+        if active_tab == "Thermal":
+            # Thermal tab: only buildings with positive thermal_kWh in scope.
+            _bld_th_kwh = (_scope_df.groupby("building")["thermal_kWh"].sum()
+                           .sort_values(ascending=False))
+            _bld_th_kwh = _bld_th_kwh[_bld_th_kwh > 0]
+            _sidebar_bld_options = _bld_th_kwh.index.tolist()
+        else:
+            # Electricity / Leaderboard / Data Integrity: buildings with any kWh.
+            _bld_kwh_scope = (_scope_df.groupby("building")["kWh"].sum()
+                              .sort_values(ascending=False))
+            _bld_kwh_scope = _bld_kwh_scope[_bld_kwh_scope > 0]
+            _sidebar_bld_options = _bld_kwh_scope.index.tolist()
+
+        # Safety net: if the scoped result is empty (e.g. user picked a single
+        # week with no readings, or Thermal tab with electric-only buildings
+        # selected), fall back to all-time so the dropdown isn't empty.
+        if not _sidebar_bld_options:
+            _all_bld_kwh = (df_all.groupby("building")["kWh"].sum()
+                            .sort_values(ascending=False))
+            _sidebar_bld_options = _all_bld_kwh[_all_bld_kwh > 0].index.tolist()
 
     def _bld_dropdown_label(b: str) -> str:
         # Underlying value passed downstream stays as the bare building name.
@@ -935,14 +967,23 @@ section[data-testid="stSidebar"] .sidebar-title {
             format_func=_bld_dropdown_label,
             label_visibility="collapsed"
         )
-        # Tiny legend so the annotation is self-explanatory
-        st.markdown(
-            '<div style="font-size:1.05rem;font-weight:600;color:#c8d9ea;margin-top:6px;line-height:1.6;">'
-            'Buildings marked <b style="color:#ffffff">"(no thermal data)"</b> '
-            'have electric meters only — selecting them in the Thermal tab will '
-            'show no thermal breakdown.'
-            '</div>',
-            unsafe_allow_html=True)
+        # Tiny legend so the annotation is self-explanatory. On the Thermal
+        # tab the option list is already filtered to thermal-only buildings,
+        # so the legend isn't needed there.
+        if active_tab != "Thermal":
+            st.markdown(
+                '<div style="font-size:1.05rem;font-weight:600;color:#c8d9ea;margin-top:6px;line-height:1.6;">'
+                'Buildings marked <b style="color:#ffffff">"(no thermal data)"</b> '
+                'have electric meters only — selecting them in the Thermal tab will '
+                'show no thermal breakdown.'
+                '</div>',
+                unsafe_allow_html=True)
+        else:
+            st.markdown(
+                '<div style="font-size:1.05rem;font-weight:600;color:#c8d9ea;margin-top:6px;line-height:1.6;">'
+                'Showing only buildings with thermal sensor data in the selected period(s).'
+                '</div>',
+                unsafe_allow_html=True)
     else:
         _sidebar_sel_bld = None
 
