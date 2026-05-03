@@ -1,3 +1,4 @@
 streamlit
 pandas
 plotly
+websockets==13.1
