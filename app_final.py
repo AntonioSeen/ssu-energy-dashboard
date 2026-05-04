@@ -591,6 +591,53 @@ def fmt_co2(kwh: float, factor: float) -> str:
     return f"{kg:,.0f} kg ({tons:,.0f} t)"
 
 
+def render_kpis(items, columns=None):
+    """
+    Render a row of stat cards in the unified KPI style.
+
+    Each item is a dict: {"label": str, "value": str, "note": Optional[str]}
+    label   → small all-caps muted heading
+    value   → large bold navy number
+    note    → optional small muted line below the value (e.g. "23,660 MWh"
+              under "23.66 GWh", or the cost subtotal under the headline)
+
+    `columns` controls how many cards per row; defaults to len(items).
+    Renders inline as HTML (Streamlit's st.metric can't be styled enough
+    to match this look). Card style: soft gray fill, slate border, rounded
+    corners, balanced padding — readable at glance and easy on the eyes.
+    """
+    n = len(items)
+    if n == 0:
+        return
+    cols = columns if columns is not None else n
+    cards_html = []
+    for it in items:
+        note_html = ""
+        if it.get("note"):
+            note_html = (f'<div style="margin-top:4px;font-size:14px;'
+                         f'color:#6b7280;font-weight:500;font-family:Inter,sans-serif;">'
+                         f'{it["note"]}</div>')
+        cards_html.append(
+            f'<div style="background:#f8fafc;border:1px solid #e2e8f0;'
+            f'border-radius:16px;padding:20px 22px;'
+            f'box-shadow:0 1px 3px rgba(0,0,0,0.04);">'
+            f'<div style="font-size:13px;color:#6b7280;font-weight:800;'
+            f'text-transform:uppercase;letter-spacing:0.08em;'
+            f'font-family:Inter,sans-serif;">{it["label"]}</div>'
+            f'<div style="margin-top:8px;font-size:36px;font-weight:800;'
+            f'color:#0f172a;letter-spacing:-0.03em;line-height:1.15;'
+            f'font-family:Inter,sans-serif;">{it["value"]}</div>'
+            f'{note_html}'
+            f'</div>'
+        )
+    st.markdown(
+        f'<div style="display:grid;grid-template-columns:repeat({cols},1fr);'
+        f'gap:14px;margin-top:16px;margin-bottom:16px;">'
+        + "".join(cards_html) +
+        '</div>',
+        unsafe_allow_html=True)
+
+
 def days_in_period(weeks: list, time_filter: str, df_scope: pd.DataFrame = None) -> float:
     """
     Total exposure-days for a list of period keys, used as the denominator for
@@ -816,9 +863,7 @@ section[data-testid="stSidebar"] .sidebar-title {
     _latest_week_default = all_weeks[-1] if all_weeks else None
 
     if time_filter == "Weekly":
-        # Show newest weeks at the top of the dropdown — easier to find recent
-        # data; the user almost always wants the most recent week first.
-        avail_w = list(reversed(all_weeks))
+        avail_w = all_weeks
         st.markdown('<p style="color:#c8d9ea;font-size:1.0rem;font-weight:700;margin-bottom:2px;">Select up to 4 weeks</p>', unsafe_allow_html=True)
         _default_weeks = [_latest_week_default] if _latest_week_default else []
         selected_weeks = st.multiselect(
@@ -835,8 +880,7 @@ section[data-testid="stSidebar"] .sidebar-title {
                         gas_therm=("gas_therm", "sum"),
                         water_gallon=("water_gallon", "sum"))
                    .reset_index().rename(columns={"_period": "week"}))
-        # Newest months at the top of the dropdown.
-        all_periods = sorted(monthly["week"].unique(), reverse=True)
+        all_periods = sorted(monthly["week"].unique())
         def month_label(p):
             try:    return pd.to_datetime(p + "-01").strftime("%B %Y")
             except: return str(p)
@@ -855,8 +899,7 @@ section[data-testid="stSidebar"] .sidebar-title {
                        gas_therm=("gas_therm", "sum"),
                        water_gallon=("water_gallon", "sum"))
                   .reset_index().rename(columns={"_period": "week"}))
-        # Newest years at the top of the dropdown.
-        all_periods = sorted(yearly["week"].unique(), reverse=True)
+        all_periods = sorted(yearly["week"].unique())
         def year_label(p): return str(p)
         st.markdown('<p style="color:#c8d9ea;font-size:1.0rem;font-weight:700;margin-bottom:2px;">Select years</p>', unsafe_allow_html=True)
         selected_weeks = st.multiselect(
@@ -878,6 +921,10 @@ section[data-testid="stSidebar"] .sidebar-title {
         "$0.20 / kWh": 0.20,
         "$0.25 / kWh": 0.25,
         "$0.30 / kWh": 0.30,
+        "$0.35 / kWh": 0.35,
+        "$0.40 / kWh": 0.40,
+        "$0.45 / kWh": 0.45,
+        "$0.50 / kWh": 0.50,
     }
     selected_rate_label = st.selectbox(
         "cost_rate", list(COST_RATE_OPTIONS.keys()),
@@ -910,47 +957,19 @@ section[data-testid="stSidebar"] .sidebar-title {
     # ── BUILDING DETAIL ──────────────────────────────────────────────────────
     st.markdown('<p style="color:#4dabf7;font-size:1.25rem;font-weight:800;margin-bottom:4px;">Building Detail</p>', unsafe_allow_html=True)
 
-    # Compute the building list dynamically:
-    # - On Electricity / Leaderboard / Data Integrity: buildings that report
-    #   ANY kWh in the currently-selected periods, sorted by total kWh desc.
-    # - On Thermal: only buildings with thermal_kWh > 0 in the selected
-    #   periods (so picking one always shows real thermal data).
-    # - When the user has NOT selected any period yet (multiselect empty,
-    #   only happens on Monthly/Yearly), fall back to all-time stats so the
-    #   sidebar isn't empty before the user has chosen anything.
+    # Compute the building list once here — all buildings that have ever reported
+    # data, sorted by total kWh (highest first). This drives the Overview and
+    # Thermal pages.
     _sidebar_bld_options = []
-    _sidebar_thermal_blds = set()  # set of buildings with thermal data ever (for the legend)
+    _sidebar_thermal_blds = set()  # buildings with non-zero thermal across all data
     if all_weeks:
-        # Always compute the "thermal-ever" set first — drives the legend below
-        _th_by_bld_total      = df_all.groupby("building")["thermal_kWh"].sum()
+        _temp_by_bld = df_all.groupby(["week", "building"])["kWh"].sum().reset_index()
+        _all_bld_kwh = _temp_by_bld.groupby("building")["kWh"].sum().sort_values(ascending=False).reset_index()
+        _sidebar_bld_options = _all_bld_kwh["building"].tolist()
+        # Identify which buildings have thermal data for the (none) annotation.
+        # Uses df_all so the answer is stable across time-range changes.
+        _th_by_bld_total = df_all.groupby("building")["thermal_kWh"].sum()
         _sidebar_thermal_blds = set(_th_by_bld_total[_th_by_bld_total > 0].index.tolist())
-
-        # Now compute the option list, scoped to selection + active tab
-        _scope_periods = list(selected_weeks) if selected_weeks else None  # None = all-time
-        _scope_df      = df_view.copy()
-        if _scope_periods is not None:
-            _scope_df = _scope_df[_scope_df["week"].isin(_scope_periods)]
-
-        if active_tab == "Thermal":
-            # Thermal tab: only buildings with positive thermal_kWh in scope.
-            _bld_th_kwh = (_scope_df.groupby("building")["thermal_kWh"].sum()
-                           .sort_values(ascending=False))
-            _bld_th_kwh = _bld_th_kwh[_bld_th_kwh > 0]
-            _sidebar_bld_options = _bld_th_kwh.index.tolist()
-        else:
-            # Electricity / Leaderboard / Data Integrity: buildings with any kWh.
-            _bld_kwh_scope = (_scope_df.groupby("building")["kWh"].sum()
-                              .sort_values(ascending=False))
-            _bld_kwh_scope = _bld_kwh_scope[_bld_kwh_scope > 0]
-            _sidebar_bld_options = _bld_kwh_scope.index.tolist()
-
-        # Safety net: if the scoped result is empty (e.g. user picked a single
-        # week with no readings, or Thermal tab with electric-only buildings
-        # selected), fall back to all-time so the dropdown isn't empty.
-        if not _sidebar_bld_options:
-            _all_bld_kwh = (df_all.groupby("building")["kWh"].sum()
-                            .sort_values(ascending=False))
-            _sidebar_bld_options = _all_bld_kwh[_all_bld_kwh > 0].index.tolist()
 
     def _bld_dropdown_label(b: str) -> str:
         # Underlying value passed downstream stays as the bare building name.
@@ -967,23 +986,14 @@ section[data-testid="stSidebar"] .sidebar-title {
             format_func=_bld_dropdown_label,
             label_visibility="collapsed"
         )
-        # Tiny legend so the annotation is self-explanatory. On the Thermal
-        # tab the option list is already filtered to thermal-only buildings,
-        # so the legend isn't needed there.
-        if active_tab != "Thermal":
-            st.markdown(
-                '<div style="font-size:1.05rem;font-weight:600;color:#c8d9ea;margin-top:6px;line-height:1.6;">'
-                'Buildings marked <b style="color:#ffffff">"(no thermal data)"</b> '
-                'have electric meters only — selecting them in the Thermal tab will '
-                'show no thermal breakdown.'
-                '</div>',
-                unsafe_allow_html=True)
-        else:
-            st.markdown(
-                '<div style="font-size:1.05rem;font-weight:600;color:#c8d9ea;margin-top:6px;line-height:1.6;">'
-                'Showing only buildings with thermal sensor data in the selected period(s).'
-                '</div>',
-                unsafe_allow_html=True)
+        # Tiny legend so the annotation is self-explanatory
+        st.markdown(
+            '<div style="font-size:1.05rem;font-weight:600;color:#c8d9ea;margin-top:6px;line-height:1.6;">'
+            'Buildings marked <b style="color:#ffffff">"(no thermal data)"</b> '
+            'have electric meters only — selecting them in the Thermal tab will '
+            'show no thermal breakdown.'
+            '</div>',
+            unsafe_allow_html=True)
     else:
         _sidebar_sel_bld = None
 
@@ -1084,23 +1094,26 @@ if active_tab == "Overview":
     else:
         _at_days_span = 0.0
 
-    at1, at2, at3, at4 = st.columns(4)
-    at1.metric("Total Energy Consumed", fmt_kwh(_at_total_kwh))
-    at2.metric("Total Energy Cost", fmt_cost(_at_total_cost))
-    at3.metric("Avg Power", fmt_power(_at_total_kwh, _at_days_span))
     _co2_kg = _at_total_kwh * EMISSION_FACTOR
     _co2_t  = _co2_kg / 1000.0
-    at4.markdown(
-        f'<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:12px;'
-        f'padding:20px 22px;box-shadow:0 1px 3px rgba(0,0,0,0.06);">'
-        f'<div style="font-size:0.82rem;font-weight:700;color:#6b7280;text-transform:uppercase;'
-        f'letter-spacing:0.1em;margin-bottom:4px;">CO₂ Emitted (Est.)</div>'
-        f'<div style="font-size:1.6rem;font-weight:800;color:#111827;letter-spacing:-0.03em;line-height:1.2;">'
-        f'{_co2_kg:,.0f} kg<br>'
-        f'<span style="font-size:1.3rem;">({_co2_t:,.0f} t)</span>'
-        f'</div>'
-        f'</div>',
-        unsafe_allow_html=True)
+    # Compact MWh subtotal as a "note" line under the headline GWh value
+    _at_mwh = _at_total_kwh / 1000.0
+    render_kpis([
+        {"label": "Total Energy Consumed",
+         "value": fmt_kwh(_at_total_kwh),
+         "note":  f"{_at_mwh:,.0f} MWh"},
+        {"label": "Total Energy Cost",
+         "value": (f"${_at_total_cost/1_000_000:.2f}M"
+                   if _at_total_cost >= 1_000_000
+                   else fmt_cost(_at_total_cost)),
+         "note":  fmt_cost(_at_total_cost)},
+        {"label": "Average Power",
+         "value": fmt_power(_at_total_kwh, _at_days_span),
+         "note":  "Energy per hour"},
+        {"label": "CO₂ Emitted",
+         "value": f"{_co2_t:,.0f} t",
+         "note":  f"{_co2_kg:,.0f} kg"},
+    ])
     st.markdown(
         '<p style="font-size:1.05rem;font-weight:700;color:#374151;margin-top:-4px;line-height:1.4;">'
         '<b>Avg Power:</b> energy per hour over the period (kWh ÷ total hours). '
@@ -1172,14 +1185,32 @@ if active_tab == "Overview":
         # selected" would divide by full calendar years (1096 days) instead of
         # the actual ~483 days of data, producing a misleadingly low Avg Power.
         _sel_days = days_in_period(sorted_sel, time_filter, df_all)
-        k1, k2, k3, k4 = st.columns(4)
         k1_label = (f"Energy During — {period_label(sorted_sel[0])}"
                     if len(sorted_sel) == 1
                     else f"Energy During — {len(sorted_sel)} Periods Combined")
-        k1.metric(k1_label, fmt_kwh(campus_total_sel))
-        k2.metric(f"Estimated Energy Cost (@ ${ENERGY_RATE}/kWh)", fmt_cost(campus_total_cost))
-        k3.metric("Avg Power", fmt_power(campus_total_sel, _sel_days))
-        k4.metric("CO₂ Emitted (Est.)", fmt_co2(campus_total_sel, EMISSION_FACTOR))
+        _sel_co2_kg = campus_total_sel * EMISSION_FACTOR
+        _sel_co2_t  = _sel_co2_kg / 1000.0
+        _sel_mwh    = campus_total_sel / 1000.0
+        render_kpis([
+            {"label": k1_label,
+             "value": fmt_kwh(campus_total_sel),
+             "note":  (f"{_sel_mwh:,.0f} MWh"
+                       if campus_total_sel >= 1_000_000
+                       else None)},
+            {"label": f"Estimated Energy Cost (@ ${ENERGY_RATE}/kWh)",
+             "value": (f"${campus_total_cost/1_000_000:.2f}M"
+                       if campus_total_cost >= 1_000_000
+                       else fmt_cost(campus_total_cost)),
+             "note":  (fmt_cost(campus_total_cost)
+                       if campus_total_cost >= 1_000_000
+                       else None)},
+            {"label": "Average Power",
+             "value": fmt_power(campus_total_sel, _sel_days),
+             "note":  "Energy per hour"},
+            {"label": "CO₂ Emitted",
+             "value": f"{_sel_co2_t:,.1f} t" if _sel_co2_t >= 1 else f"{_sel_co2_kg:,.0f} kg",
+             "note":  (f"{_sel_co2_kg:,.0f} kg" if _sel_co2_t >= 1 else None)},
+        ])
 
         # All Buildings chart
         max_periods = 4
@@ -1291,23 +1322,40 @@ if active_tab == "Overview":
         # Does NOT affect the dropdown, trend chart title, or alert banners.
         _bld_short = "Wine Spectator LC" if sel_bld == "Wine Spectator Learning Ctr" else sel_bld
 
-        bm1, bm2, bm3, bm4 = st.columns(4)
         bm1_label = (f"{_bld_short} — {period_label(sorted_sel[0])}"
                      if len(sorted_sel) == 1
                      else f"{_bld_short} — {len(sorted_sel)} Selected Periods")
         bm2_label = (f"Estimated Cost (@ ${ENERGY_RATE}/kWh)"
                      if len(sorted_sel) == 1
                      else f"Combined Cost of {len(sorted_sel)} Periods (@ ${ENERGY_RATE}/kWh)")
-        bm1.metric(bm1_label, fmt_kwh(b_cur))
-        bm2.metric(bm2_label, fmt_cost(b_cost))
         # Per-building Avg Power: scope days to this building's actual data
         # span within the selected periods. A building that started reporting
         # late should not be averaged across the full campus span — that would
         # understate its real power draw. Falls back to campus span if the
         # building has no data in the period.
         _b_scope = df_all[df_all["building"] == sel_bld]
-        bm3.metric("Avg Power", fmt_power(b_cur, days_in_period(sorted_sel, time_filter, _b_scope)))
-        bm4.metric("CO₂ Emitted (Est.)", fmt_co2(b_cur, EMISSION_FACTOR))
+        _b_co2_kg = b_cur * EMISSION_FACTOR
+        _b_co2_t  = _b_co2_kg / 1000.0
+        _b_mwh    = b_cur / 1000.0
+        render_kpis([
+            {"label": bm1_label,
+             "value": fmt_kwh(b_cur),
+             "note":  (f"{_b_mwh:,.0f} MWh"
+                       if b_cur >= 1_000_000 else None)},
+            {"label": bm2_label,
+             "value": (f"${b_cost/1_000_000:.2f}M"
+                       if b_cost >= 1_000_000
+                       else fmt_cost(b_cost)),
+             "note":  (fmt_cost(b_cost)
+                       if b_cost >= 1_000_000 else None)},
+            {"label": "Average Power",
+             "value": fmt_power(b_cur, days_in_period(sorted_sel, time_filter, _b_scope)),
+             "note":  "Energy per hour"},
+            {"label": "CO₂ Emitted",
+             "value": (f"{_b_co2_t:,.1f} t" if _b_co2_t >= 1
+                       else f"{_b_co2_kg:,.0f} kg"),
+             "note":  (f"{_b_co2_kg:,.0f} kg" if _b_co2_t >= 1 else None)},
+        ])
 
         st.markdown(
             f'<div style="font-size:1.25rem;font-weight:800;color:#111827;font-family:Inter,sans-serif;'
@@ -1619,10 +1667,21 @@ elif active_tab == "Thermal":
     _th_thermal_cost = _th_thermal_kwh * ENERGY_RATE
 
     st.markdown('<div class="sec-label">All-Time Thermal Overview</div>', unsafe_allow_html=True)
-    tc1, tc2, tc3 = st.columns(3)
-    tc1.metric("Total Campus kWh (All Time)", fmt_kwh(_th_total_kwh))
-    tc2.metric("Thermal Portion (kWh equiv)", fmt_kwh(_th_thermal_kwh))
-    tc3.metric("Avg Thermal Share", f"{_th_avg_pct:.1f}%")
+    _th_total_mwh   = _th_total_kwh   / 1000.0
+    _th_thermal_mwh = _th_thermal_kwh / 1000.0
+    render_kpis([
+        {"label": "Total Campus kWh (All Time)",
+         "value": fmt_kwh(_th_total_kwh),
+         "note":  (f"{_th_total_mwh:,.0f} MWh"
+                   if _th_total_kwh >= 1_000_000 else None)},
+        {"label": "Thermal Portion (kWh equiv)",
+         "value": fmt_kwh(_th_thermal_kwh),
+         "note":  (f"{_th_thermal_mwh:,.0f} MWh"
+                   if _th_thermal_kwh >= 1_000_000 else None)},
+        {"label": "Avg Thermal Share",
+         "value": f"{_th_avg_pct:.1f}%",
+         "note":  "Heating + cooling vs total"},
+    ], columns=3)
 
     # Stacked bar chart — thermal vs non-thermal by month
     st.markdown('<div class="sec-label">Monthly Energy Split — Thermal vs Electric</div>', unsafe_allow_html=True)
@@ -1810,20 +1869,37 @@ elif active_tab == "Thermal":
             _b_th_cost = _b_th_cur * ENERGY_RATE
             _bld_short_th = "Wine Spectator LC" if _th_sel_bld == "Wine Spectator Learning Ctr" else _th_sel_bld
 
-            _tbm1, _tbm2, _tbm3, _tbm4 = st.columns(4)
             _tbm1_label = (f"{_bld_short_th} — {period_label(sorted_sel[0])} (Thermal)"
                            if len(sorted_sel) == 1
                            else f"{_bld_short_th} — {len(sorted_sel)} Selected Periods (Thermal)")
             _tbm2_label = (f"Estimated Thermal Cost (@ ${ENERGY_RATE}/kWh)"
                            if len(sorted_sel) == 1
                            else f"Combined Thermal Cost of {len(sorted_sel)} Periods (@ ${ENERGY_RATE}/kWh)")
-            _tbm1.metric(_tbm1_label, fmt_kwh(_b_th_cur))
-            _tbm2.metric(_tbm2_label, fmt_cost(_b_th_cost))
             # Same scoping as Overview's per-building Avg Power: use this
             # building's actual data span within the selected periods.
             _th_b_scope = df_all[df_all["building"] == _th_sel_bld]
-            _tbm3.metric("Avg Thermal Power", fmt_power(_b_th_cur, days_in_period(sorted_sel, time_filter, _th_b_scope)))
-            _tbm4.metric("CO₂ Emitted (Est.)", fmt_co2(_b_th_cur, EMISSION_FACTOR))
+            _bth_co2_kg = _b_th_cur * EMISSION_FACTOR
+            _bth_co2_t  = _bth_co2_kg / 1000.0
+            _bth_mwh    = _b_th_cur / 1000.0
+            render_kpis([
+                {"label": _tbm1_label,
+                 "value": fmt_kwh(_b_th_cur),
+                 "note":  (f"{_bth_mwh:,.0f} MWh"
+                           if _b_th_cur >= 1_000_000 else None)},
+                {"label": _tbm2_label,
+                 "value": (f"${_b_th_cost/1_000_000:.2f}M"
+                           if _b_th_cost >= 1_000_000
+                           else fmt_cost(_b_th_cost)),
+                 "note":  (fmt_cost(_b_th_cost)
+                           if _b_th_cost >= 1_000_000 else None)},
+                {"label": "Average Thermal Power",
+                 "value": fmt_power(_b_th_cur, days_in_period(sorted_sel, time_filter, _th_b_scope)),
+                 "note":  "Energy per hour"},
+                {"label": "CO₂ Emitted",
+                 "value": (f"{_bth_co2_t:,.1f} t" if _bth_co2_t >= 1
+                           else f"{_bth_co2_kg:,.0f} kg"),
+                 "note":  (f"{_bth_co2_kg:,.0f} kg" if _bth_co2_t >= 1 else None)},
+            ])
 
             st.markdown(
                 f'<div style="font-size:1.25rem;font-weight:800;color:#111827;font-family:Inter,sans-serif;'
@@ -1914,6 +1990,42 @@ elif active_tab == "DataIntegrity":
         'Full sensor registry, verified data, gap analysis, and deployment notes.</p>',
         unsafe_allow_html=True)
 
+    # ── Known data-quality issue: Physical Education meter (May–Aug 2025) ──
+    # Highlighted near the top so anyone reading the DI report sees the
+    # documented issue first. The Building Data Gaps table below repeats
+    # this in row form, but the summary card explains the cause.
+    st.markdown(
+        '<div style="background:#fffbeb;border:1px solid #fcd34d;'
+        'border-left:5px solid #f59e0b;border-radius:12px;padding:18px 22px;'
+        'margin-bottom:18px;font-family:Inter,sans-serif;">'
+        '<div style="font-size:0.78rem;font-weight:800;color:#92400e;'
+        'text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">'
+        '⚠️ Known Data-Quality Issue — Documented &amp; Resolved'
+        '</div>'
+        '<div style="font-size:1.15rem;font-weight:800;color:#0f172a;'
+        'margin-bottom:8px;letter-spacing:-0.01em;">'
+        'Physical Education electric meter — May 1 to August 31, 2025'
+        '</div>'
+        '<div style="font-size:0.95rem;color:#374151;line-height:1.6;">'
+        'During this 4-month window the PE meter reported values in '
+        '<b>watt-hours</b> while labeled as <b>kilowatt-hours</b> — a unit '
+        'mismatch that inflated readings ~1,000×. The meter recalibrated on '
+        'its own in early September 2025 and has reported correctly since.'
+        '<br><br>'
+        '<b>Evidence:</b> May–Jul averaged 15,232 kWh per 15-min reading '
+        'against 12.76 kWh post-September — a 1,194× ratio. Pre-cleanup '
+        'totals reached 110 million kWh over three months for a single gym '
+        'building, which is physically impossible (typical campus gym is '
+        '50,000–200,000 kWh per <em>year</em>).'
+        '<br><br>'
+        '<b>Action taken:</b> 7,745 affected rows were removed from MySQL '
+        'after backup. PE shows no data for May–Aug 2025; this is more '
+        'honest than displaying inflated values. All other buildings and '
+        'time periods are unaffected.'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True)
+
     # Latest week verified data table
     _di_latest   = all_weeks[-1]
     _di_earliest = all_weeks[0]
@@ -1983,6 +2095,121 @@ elif active_tab == "DataIntegrity":
     _n_partial = sum(1 for d in _bld_chart_data if d["label"] == "Partial Data")
     _n_nodata  = sum(1 for d in _bld_chart_data if d["label"] == "No Data")
     _partial_names = [d["building"] for d in _bld_chart_data if d["label"] == "Partial Data"]
+
+    # ── Building Data Gaps (dynamic) ──────────────────────────────────────
+    # Detect months where each building reported NO data despite having
+    # data in earlier AND later months — a true "gap" rather than a
+    # not-yet-instrumented period or a not-yet-reported recent month.
+    # Known gaps (with cause) get an explanatory note; unknown gaps get
+    # the neutral "meter offline" framing so we never claim more than we know.
+    st.markdown('<div class="sec-label">Building Data Gaps</div>',
+                unsafe_allow_html=True)
+    st.markdown(
+        '<p style="font-size:0.95rem;color:#6b7280;margin-top:-2px;line-height:1.5;">'
+        'Months where a building has no data despite reporting in earlier and '
+        'later months. This is the dashboard\'s honest accounting of what is '
+        'and isn\'t in the database.'
+        '</p>', unsafe_allow_html=True)
+
+    # Hard-coded explanations for gaps where we DO know the cause. Anything
+    # not in this dict gets a neutral "meter offline" message.
+    KNOWN_GAP_CAUSES = {
+        ("Physical Education", "2025-05"):
+            "Unit mismatch — meter reported watt-hours labeled as kWh; readings removed during data quality review (May–Aug 2025).",
+        ("Physical Education", "2025-06"):
+            "Unit mismatch — meter reported watt-hours labeled as kWh; readings removed during data quality review (May–Aug 2025).",
+        ("Physical Education", "2025-07"):
+            "Unit mismatch — meter reported watt-hours labeled as kWh; readings removed during data quality review (May–Aug 2025).",
+        ("Physical Education", "2025-08"):
+            "Unit mismatch — meter reported watt-hours labeled as kWh; readings removed during data quality review (May–Aug 2025).",
+    }
+
+    # Compute gaps per building
+    _gap_df = df_all.dropna(subset=["_wstart"]).copy()
+    _gap_df["_month"] = _gap_df["_wstart"].dt.to_period("M")
+
+    gap_rows = []  # list of (building, month_str, cause)
+    for _bld in sorted(_gap_df["building"].unique()):
+        _bld_df = _gap_df[(_gap_df["building"] == _bld) & (_gap_df["kWh"] > 0)]
+        if _bld_df.empty:
+            continue
+        _months = sorted(_bld_df["_month"].unique())
+        if len(_months) < 2:
+            continue
+        # All months in this building's operational range:
+        _all_months_range = pd.period_range(_months[0], _months[-1], freq="M")
+        _present = set(_months)
+        for _m in _all_months_range:
+            if _m not in _present:
+                _m_str = str(_m)
+                _cause = KNOWN_GAP_CAUSES.get(
+                    (_bld, _m_str),
+                    "No data reported in this period — meter may have been offline or undergoing maintenance."
+                )
+                gap_rows.append((_bld, _m_str, _cause))
+
+    if not gap_rows:
+        st.markdown(
+            '<div class="card" style="border-left:4px solid #15803d;">'
+            '<div style="font-family:Inter,sans-serif;color:#374151;font-size:0.95rem;">'
+            '✅ <b>No gaps detected.</b> Every building in the database has '
+            'continuous month-to-month coverage within its operational range.'
+            '</div></div>',
+            unsafe_allow_html=True)
+    else:
+        # Group by building + cause so consecutive months under the same
+        # explanation render as one "May 2025 – Aug 2025" range instead of
+        # four separate rows.
+        from itertools import groupby
+        by_bld = defaultdict(list)
+        for _b, _m, _c in gap_rows:
+            by_bld[_b].append((_m, _c))
+
+        gap_tbl = ('<table class="di-table"><thead><tr>'
+                   '<th>Building</th>'
+                   '<th>Affected Months</th>'
+                   '<th>Explanation</th>'
+                   '</tr></thead><tbody>')
+        for _b in sorted(by_bld):
+            rows_for_bld = sorted(by_bld[_b], key=lambda x: x[0])
+            # Group adjacent months sharing the same cause
+            groups = []
+            for _, run in groupby(enumerate(rows_for_bld),
+                                  key=lambda iv: (
+                                      pd.Period(iv[1][0]).ordinal - iv[0],
+                                      iv[1][1])):
+                run_list = [x[1] for x in run]
+                groups.append((run_list[0][1],
+                               run_list[0][0],
+                               run_list[-1][0]))
+            for cause, m_start, m_end in groups:
+                if m_start == m_end:
+                    months_label = pd.Period(m_start).to_timestamp().strftime("%b %Y")
+                else:
+                    months_label = (pd.Period(m_start).to_timestamp().strftime("%b %Y")
+                                    + " – "
+                                    + pd.Period(m_end).to_timestamp().strftime("%b %Y"))
+                # Color-code the cause: amber for known, gray for neutral
+                _is_known = "data quality review" in cause or "Unit mismatch" in cause
+                _row_bg = "#fffbeb" if _is_known else "#ffffff"
+                _icon   = "⚠️" if _is_known else "🔇"
+                gap_tbl += (f'<tr style="background:{_row_bg};">'
+                            f'<td><b>{_b}</b></td>'
+                            f'<td><b>{months_label}</b></td>'
+                            f'<td>{_icon} &nbsp;{cause}</td></tr>')
+        gap_tbl += '</tbody></table>'
+        st.markdown(f'<div class="card" style="overflow-x:auto">{gap_tbl}</div>',
+                    unsafe_allow_html=True)
+
+        # Legend below the table
+        st.markdown(
+            '<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:8px;'
+            'font-family:Inter,sans-serif;font-size:0.85rem;color:#6b7280;">'
+            '<span><b style="color:#92400e;">⚠️</b> &nbsp;Known data-quality issue — investigated and documented</span>'
+            '<span><b>🔇</b> &nbsp;Cause unknown — meter offline or not reporting during the gap</span>'
+            '</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
 
     st.markdown('<div class="sec-label">Building Data Status</div>', unsafe_allow_html=True)
     st.markdown(
