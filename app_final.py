@@ -527,6 +527,118 @@ SENSOR_REGISTRY = [
 ]
 
 
+# Map utility-type to df_all column-derived "is this row contributing data?" check.
+# - Electric value is implicit: total kWh minus the thermal subset = electric kWh.
+# - Thermal/gas/water map directly to a single column.
+def _row_contribution(row, utility: str) -> float:
+    """Return how much of `utility` a single df_all row carries. Zero if none."""
+    if utility == "Electric":
+        # Total kWh minus thermal portion = electric kWh
+        kwh   = float(row.get("kWh") or 0)
+        thrm  = float(row.get("thermal_kWh") or 0)
+        return max(0.0, kwh - thrm)
+    if utility == "Thermal":
+        return float(row.get("thermal_kWh") or 0)
+    if utility == "Gas":
+        return float(row.get("gas_therm") or 0)
+    if utility == "Water":
+        return float(row.get("water_gallon") or 0)
+    return 0.0
+
+
+def compute_sensor_statuses(df_all: pd.DataFrame, recent_weeks: int = 4):
+    """
+    For each (building, utility) pair in SENSOR_REGISTRY, derive a current
+    Status + Notes from df_all instead of relying on the hand-curated values.
+
+    Returns a dict keyed by sensor_id with values (status, notes_text).
+    Status is one of: "OK", "Review", "Missing", "PGE".
+
+    The signal we have is per-(building, utility) since the weekly CSV
+    aggregates multiple sensors of the same utility at the same building
+    into one column. Sensors of the same (building, utility) therefore
+    share a status — that's the most honest verdict the data supports.
+
+    Verdicts:
+      - PGE   → preserved verbatim from registry (these are utility-account
+                meters, not BMS sensors; their identity is metadata, not
+                derivable from the weekly CSV)
+      - OK    → at least one nonzero reading in the most recent
+                `recent_weeks` weeks for this (building, utility)
+      - Review → has historical nonzero readings but nothing in the recent
+                window (meter may have gone offline or been disconnected)
+      - Missing → no nonzero readings ever for this (building, utility)
+    """
+    out: dict[str, tuple[str, str]] = {}
+    if df_all is None or df_all.empty:
+        # Defensive: keep the static notes if there's no data to derive from.
+        for bld, sid, util, unit, status, notes in SENSOR_REGISTRY:
+            out[sid] = (status, notes)
+        return out
+
+    # Determine the recent-window cutoff
+    df_dates = df_all.dropna(subset=["_wstart"]).copy()
+    if df_dates.empty:
+        for bld, sid, util, unit, status, notes in SENSOR_REGISTRY:
+            out[sid] = (status, notes)
+        return out
+    latest_week = df_dates["_wstart"].max()
+    recent_cut  = latest_week - pd.Timedelta(weeks=recent_weeks)
+
+    # Pre-aggregate per (building) to make repeated lookups cheap
+    by_bld_all     = df_dates.groupby("building")
+    df_recent      = df_dates[df_dates["_wstart"] > recent_cut]
+    by_bld_recent  = df_recent.groupby("building")
+
+    def _bld_utility_total(grouper, bld: str, util: str) -> tuple[float, pd.Timestamp | None]:
+        """Total contribution + last-seen week for this (building, utility)."""
+        if bld not in grouper.groups:
+            return 0.0, None
+        rows = grouper.get_group(bld)
+        contribs = rows.apply(lambda r: _row_contribution(r, util), axis=1)
+        nonzero  = rows[contribs > 0]
+        total    = float(contribs.sum())
+        last_seen = nonzero["_wstart"].max() if not nonzero.empty else None
+        return total, last_seen
+
+    for bld, sid, util, unit, orig_status, orig_notes in SENSOR_REGISTRY:
+        # PG&E utility-account meters: preserve their identity. Derive a
+        # truthful note from recent activity but keep the PGE badge.
+        if orig_status == "PGE":
+            recent_total, _ = _bld_utility_total(by_bld_recent, bld, util)
+            if recent_total > 0:
+                note = (f"PG&E utility-account meter — actively contributing "
+                        f"to the campus electric total")
+            else:
+                note = ("PG&E utility-account meter — no recent activity "
+                        "(check account status)")
+            out[sid] = ("PGE", note)
+            continue
+
+        all_total, last_seen   = _bld_utility_total(by_bld_all,    bld, util)
+        recent_total, _        = _bld_utility_total(by_bld_recent, bld, util)
+
+        if recent_total > 0:
+            # Active in the last 4 weeks
+            note = f"Active — last reading {last_seen.strftime('%b %d, %Y')}"
+            out[sid] = ("OK", note)
+        elif all_total > 0:
+            # Has data historically but nothing recent
+            weeks_since = max(0, int((latest_week - last_seen).days // 7)) if last_seen else None
+            since_str = (f" ({weeks_since} weeks ago)"
+                         if weeks_since and weeks_since > 0 else "")
+            note = (f"No recent data — last seen "
+                    f"{last_seen.strftime('%b %d, %Y') if last_seen else 'unknown'}"
+                    f"{since_str}. Meter may be offline.")
+            out[sid] = ("Review", note)
+        else:
+            # Nothing ever — meter never reported through the pipeline
+            note = "No data received — sensor not contributing to weekly CSV"
+            out[sid] = ("Missing", note)
+
+    return out
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1638,12 +1750,16 @@ elif active_tab == "Thermal":
     # avoids misattributing a building's electric usage to thermal just because
     # the building also has thermal meters (e.g. Green Music Center).
 
-    # Buildings that have at least one thermal sensor — used for the per-building
-    # breakdown chart (so we show only buildings with thermal meters installed).
+    # Buildings that have at least one thermal sensor currently active —
+    # uses dynamic statuses so this filter reflects what's reporting now,
+    # not the original hand-curated list.
     _thermal_buildings = set()
-    for _b, _sid, _util, _unit, _st, _notes in SENSOR_REGISTRY:
-        if _util == "Thermal" and _st == "OK":
-            _thermal_buildings.add(_b)
+    _dyn_st_for_th = compute_sensor_statuses(df_all)
+    for _b, _sid, _util, _unit, _orig_st, _orig_notes in SENSOR_REGISTRY:
+        if _util == "Thermal":
+            _live_st, _ = _dyn_st_for_th.get(_sid, (_orig_st, _orig_notes))
+            if _live_st == "OK":
+                _thermal_buildings.add(_b)
 
     # All-time monthly thermal data — uses thermal_kWh column directly
     _th_at = df_all.dropna(subset=["_wstart"]).copy()
@@ -2069,10 +2185,14 @@ elif active_tab == "DataIntegrity":
         f'converted to kWh. Gas and water meters currently have no data available.'
         f'</div>', unsafe_allow_html=True)
 
-    # Building data status chart
+    # Building data status chart — uses dynamically computed statuses so the
+    # green/amber/red verdict reflects what the weekly data actually shows
+    # right now, not a hand-curated list that drifts over time.
+    _dyn_statuses_for_chart = compute_sensor_statuses(df_all)
     _bld_sensor_statuses = defaultdict(list)
-    for _b, _sid, _util, _unit, _st, _notes in SENSOR_REGISTRY:
-        _bld_sensor_statuses[_b].append(_st)
+    for _b, _sid, _util, _unit, _orig_st, _orig_notes in SENSOR_REGISTRY:
+        _live_st, _ = _dyn_statuses_for_chart.get(_sid, (_orig_st, _orig_notes))
+        _bld_sensor_statuses[_b].append(_live_st)
 
     _bld_chart_data = []
     for _b, _sts in _bld_sensor_statuses.items():
@@ -2398,11 +2518,22 @@ elif active_tab == "DataIntegrity":
     # Full sensor registry
     st.markdown('<div class="sec-label">Full Sensor Registry — All 37 Sensors</div>',
                 unsafe_allow_html=True)
+    st.markdown(
+        '<p style="font-size:0.95rem;color:#6b7280;margin-top:-2px;line-height:1.5;">'
+        'Status and notes are derived dynamically from the weekly data. A sensor '
+        'reads <b>OK</b> when its building has activity for that utility in the '
+        'last 4 weeks, <b>Review</b> when it has historical data but nothing '
+        'recent, and <b>Missing</b> when it has never contributed to the weekly '
+        'CSV. Multiple sensors of the same utility at the same building share a '
+        'status because the weekly CSV aggregates them.'
+        '</p>', unsafe_allow_html=True)
+    _dynamic_statuses = compute_sensor_statuses(df_all)
     tbl = ('<table class="di-table"><thead><tr>'
            '<th>Building</th><th>Sensor ID</th><th>Utility</th><th>Raw Unit</th>'
            '<th>Status</th><th>Notes</th>'
            '</tr></thead><tbody>')
-    for bld, sid, util, unit, status, notes in SENSOR_REGISTRY:
+    for bld, sid, util, unit, _orig_status, _orig_notes in SENSOR_REGISTRY:
+        status, notes = _dynamic_statuses.get(sid, (_orig_status, _orig_notes))
         sbadge = badge_html(status)
         tbl += (f'<tr><td><b>{bld}</b></td>'
                 f'<td><code style="background:#f1f5f9;padding:2px 6px;border-radius:3px;font-size:0.82rem">{sid}</code></td>'
